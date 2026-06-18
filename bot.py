@@ -606,7 +606,67 @@ def webhook():
 
 @app.route('/', methods=['GET'])
 def index():
-    return "Бот работает с ценами и фото!", 200
+    try:
+        with open('index.html', 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        return "Файл index.html не найден. Убедитесь, что он в папке проекта.", 404
+    
+
+@app.route('/api/weekly-stats', methods=['GET'])
+def weekly_stats():
+    """Возвращает JSON для графика списаний за неделю"""
+    try:
+        sheet = get_sheet("СПИСАНИЕ")
+        data = sheet.get_all_values()
+        
+        if len(data) <= 1:
+            return jsonify({"labels": [], "values": [], "totalLoss": 0, "totalItems": 0})
+        
+        from datetime import datetime, timedelta
+        week_ago = datetime.now() - timedelta(days=7)
+        
+        days_map = {}
+        total_loss = 0
+        total_items = 0
+        
+        for row in data[1:]:
+            if len(row) >= 7:
+                try:
+                    row_date = datetime.strptime(row[0], "%d.%m.%Y")
+                    if row_date >= week_ago:
+                        day_key = row_date.strftime("%a")
+                        loss = float(row[6])
+                        quantity = float(row[4])
+                        
+                        if day_key not in days_map:
+                            days_map[day_key] = 0
+                        days_map[day_key] += loss
+                        total_loss += loss
+                        total_items += quantity
+                except:
+                    continue
+        
+        day_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        day_names_ru = {'Mon': 'Пн', 'Tue': 'Вт', 'Wed': 'Ср', 'Thu': 'Чт', 'Fri': 'Пт', 'Sat': 'Сб', 'Sun': 'Вс'}
+        
+        labels = []
+        values = []
+        for day in day_order:
+            ru_day = day_names_ru.get(day, day)
+            labels.append(ru_day)
+            values.append(days_map.get(ru_day, 0))
+        
+        return jsonify({
+            "labels": labels,
+            "values": values,
+            "totalLoss": round(total_loss, 0),
+            "totalItems": round(total_items, 0)
+        })
+        
+    except Exception as e:
+        logging.error(f"Ошибка API статистики: {e}")
+        return jsonify({"error": str(e)}), 500 
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

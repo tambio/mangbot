@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Учёт списаний</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background: var(--tg-theme-bg-color, #ffffff);
+            color: var(--tg-theme-text-color, #000000);
+            padding: 16px;
+            min-height: 100vh;
+        }
+
+        .header {
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid var(--tg-theme-hint-color, #e0e0e0);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .cards {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+            border-radius: 16px;
+            padding: 18px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .card:active {
+            transform: scale(0.97);
+        }
+
+        .card-icon {
+            font-size: 32px;
+            width: 50px;
+            height: 50px;
+            background: var(--tg-theme-button-color, #3390ec);
+            color: white;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .card-content {
+            flex: 1;
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .card-sub {
+            font-size: 14px;
+            color: var(--tg-theme-hint-color, #888);
+            margin-top: 2px;
+        }
+
+        /* Страница графика (изначально скрыта) */
+        .page {
+            display: none;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        .back-btn {
+            background: var(--tg-theme-button-color, #3390ec);
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 12px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-bottom: 16px;
+            width: 100%;
+            font-weight: 500;
+        }
+
+        .chart-container {
+            background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+            border-radius: 16px;
+            padding: 16px;
+            margin-top: 10px;
+        }
+
+        canvas {
+            max-width: 100%;
+            max-height: 350px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .stat-item {
+            background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+            border-radius: 12px;
+            padding: 14px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 26px;
+            font-weight: 700;
+            color: var(--tg-theme-button-color, #3390ec);
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--tg-theme-hint-color, #888);
+            margin-top: 4px;
+        }
+
+        .loader {
+            text-align: center;
+            padding: 40px 0;
+            color: var(--tg-theme-hint-color, #888);
+        }
+
+        .error-msg {
+            color: #e74c3c;
+            background: #fde8e8;
+            padding: 12px;
+            border-radius: 10px;
+            margin-top: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ========== ГЛАВНАЯ СТРАНИЦА ========== -->
+    <div id="mainPage" class="page active">
+        <div class="header">
+            <span>☕</span> Учёт списаний
+        </div>
+
+        <div class="cards">
+            <!-- Карточка 1: График списаний -->
+            <div class="card" onclick="openChart()">
+                <div class="card-icon">📈</div>
+                <div class="card-content">
+                    <div class="card-title">Списания</div>
+                    <div class="card-sub">График за неделю</div>
+                </div>
+                <span style="font-size:20px;color:var(--tg-theme-hint-color, #bbb);">›</span>
+            </div>
+
+            <!-- Карточка 2: Отчёты -->
+            <div class="card" onclick="alert('PDF отчёт будет доступен позже')">
+                <div class="card-icon">📋</div>
+                <div class="card-content">
+                    <div class="card-title">Отчёты</div>
+                    <div class="card-sub">PDF / Excel</div>
+                </div>
+                <span style="font-size:20px;color:var(--tg-theme-hint-color, #bbb);">›</span>
+            </div>
+
+            <!-- Карточка 3: Фото -->
+            <div class="card" onclick="alert('Последние фото списаний будут здесь')">
+                <div class="card-icon">📸</div>
+                <div class="card-content">
+                    <div class="card-title">Фото</div>
+                    <div class="card-sub">Последние 5</div>
+                </div>
+                <span style="font-size:20px;color:var(--tg-theme-hint-color, #bbb);">›</span>
+            </div>
+
+            <!-- Карточка 4: Настройки -->
+            <div class="card" onclick="alert('Настройка цен и доступа')">
+                <div class="card-icon">🛠</div>
+                <div class="card-content">
+                    <div class="card-title">Настройки</div>
+                    <div class="card-sub">Цены, доступ</div>
+                </div>
+                <span style="font-size:20px;color:var(--tg-theme-hint-color, #bbb);">›</span>
+            </div>
+        </div>
+
+        <div style="font-size:13px;color:var(--tg-theme-hint-color, #aaa);text-align:center;margin-top:10px;">
+            ver 1.0 · данные из Google Sheets
+        </div>
+    </div>
+
+    <!-- ========== СТРАНИЦА ГРАФИКА ========== -->
+    <div id="chartPage" class="page">
+        <button class="back-btn" onclick="goHome()">← На главную</button>
+
+        <div style="font-size:18px;font-weight:600;margin-bottom:6px;">📈 Списания за неделю</div>
+        <div style="font-size:14px;color:var(--tg-theme-hint-color, #888);margin-bottom:12px;">
+            по дням · убыток в ₸
+        </div>
+
+        <div id="loader" class="loader">⏳ Загрузка данных...</div>
+        <div id="errorMsg" class="error-msg">❌ Не удалось загрузить данные</div>
+
+        <div id="chartContainer" class="chart-container" style="display:none;">
+            <canvas id="myChart"></canvas>
+        </div>
+
+        <div id="statsContainer" class="stats-grid" style="display:none;">
+            <div class="stat-item">
+                <div class="stat-number" id="totalLoss">0</div>
+                <div class="stat-label">Всего убыток (₸)</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number" id="totalItems">0</div>
+                <div class="stat-label">Всего списано (шт)</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ---- Инициализация Telegram Mini App ----
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        // ---- Переключение страниц ----
+        function openChart() {
+            document.getElementById('mainPage').classList.remove('active');
+            document.getElementById('chartPage').classList.add('active');
+            loadChartData();
+        }
+
+        function goHome() {
+            document.getElementById('chartPage').classList.remove('active');
+            document.getElementById('mainPage').classList.add('active');
+        }
+
+        // ---- Загрузка данных для графика ----
+        async function loadChartData() {
+            const loader = document.getElementById('loader');
+            const errorMsg = document.getElementById('errorMsg');
+            const chartContainer = document.getElementById('chartContainer');
+            const statsContainer = document.getElementById('statsContainer');
+
+            loader.style.display = 'block';
+            errorMsg.style.display = 'none';
+            chartContainer.style.display = 'none';
+            statsContainer.style.display = 'none';
+
+            try {
+                // Запрос к вашему боту (бот должен отдавать JSON)
+                const response = await fetch('/api/weekly-stats');
+                const data = await response.json();
+
+                if (!data || !data.labels || data.labels.length === 0) {
+                    throw new Error('Нет данных');
+                }
+
+                // Показываем график
+                chartContainer.style.display = 'block';
+                statsContainer.style.display = 'block';
+
+                document.getElementById('totalLoss').textContent = data.totalLoss || 0;
+                document.getElementById('totalItems').textContent = data.totalItems || 0;
+
+                // Строим график
+                const ctx = document.getElementById('myChart').getContext('2d');
+                new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: data.labels, // ["Пн", "Вт", ...]
+                        datasets: [{
+                            label: 'Убыток (₸)',
+                            data: data.values,
+                            backgroundColor: 'rgba(51, 144, 236, 0.6)',
+                            borderColor: '#3390ec',
+                            borderWidth: 2,
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: { display: false }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                grid: { color: 'rgba(0,0,0,0.06)' }
+                            },
+                            x: {
+                                grid: { display: false }
+                            }
+                        }
+                    }
+                });
+
+            } catch (err) {
+                console.error(err);
+                errorMsg.style.display = 'block';
+                errorMsg.textContent = '❌ ' + err.message;
+            } finally {
+                loader.style.display = 'none';
+            }
+        }
+
+        // Если нужно закрыть приложение по свайпу вниз (опционально)
+        tg.onEvent('viewportChanged', function() {
+            // Можно добавить логику
+        });
+    </script>
+</body>
+</html>
