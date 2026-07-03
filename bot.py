@@ -2,13 +2,9 @@ import os
 import logging
 from flask import Flask, request, jsonify
 import requests
-from datetime import datetime, timedelta
-import calendar
+from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-import io
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SHEET_ID = os.environ.get("SHEET_ID")
@@ -18,153 +14,96 @@ logging.basicConfig(level=logging.INFO)
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
+# Хранилище временных данных пользователей
 user_data = {}
 
-MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-          'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+# ========================
+# РАБОТА С GOOGLE SHEETS
+# ========================
 
-
-
-def get_sheet(sheet_name):
-    """Подключение к указанному листу Google Sheets"""
+def get_sheet():
+    """Подключение к Google Sheets"""
     creds_path = '/etc/secrets/credentials.json'
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
     client = gspread.authorize(creds)
-    return client.open_by_key(SHEET_ID).worksheet(sheet_name)
+    return client.open_by_key(SHEET_ID).sheet1
 
-def get_drive_service():
-    """Подключение к Google Drive"""
-    creds_path = '/etc/secrets/credentials.json'
-    scope = ["https://www.googleapis.com/auth/drive.file"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
-    return build('drive', 'v3', credentials=creds)
-
-def get_or_create_folder(drive_service):
-    """Создаёт папку в Google Drive, если её нет"""
-    folder_name = "Списания_фото"
-    
-    results = drive_service.files().list(
-        q=f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-        fields="files(id, name)"
-    ).execute()
-    
-    folders = results.get('files', [])
-    
-    if folders:
-        folder_id = folders[0]['id']
-        logging.info(f"Папка найдена: {folder_id}")
-    else:
-        file_metadata = {
-            'name': folder_name,
-            'mimeType': 'application/vnd.google-apps.folder'
-        }
-        folder = drive_service.files().create(body=file_metadata, fields='id').execute()
-        folder_id = folder.get('id')
-        logging.info(f"Папка создана: {folder_id}")
-    
-    return folder_id
-
-def upload_photo_to_drive(file_url, user_name):
-    """Скачивает фото из Telegram и загружает в Google Drive"""
+def get_all_funds():
+    """Получить все фонды из таблицы"""
     try:
-        response = requests.get(file_url)
-        if response.status_code != 200:
-            return None, "Ошибка скачивания фото"
-        
-        file_content = response.content
-        drive_service = get_drive_service()
-        folder_id = get_or_create_folder(drive_service)
-        
-        ext = 'jpg'
-        if 'png' in file_url.lower():
-            ext = 'png'
-        elif 'jpeg' in file_url.lower() or 'jpg' in file_url.lower():
-            ext = 'jpg'
-        
-        file_name = f"photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{user_name}.{ext}"
-        
-        file_metadata = {
-            'name': file_name,
-            'parents': [folder_id]
-        }
-        
-        media = MediaIoBaseUpload(io.BytesIO(file_content), mimetype=f'image/{ext}')
-        file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        file_id = file.get('id')
-        
-        drive_service.permissions().create(
-            fileId=file_id,
-            body={'type': 'anyone', 'role': 'reader'}
-        ).execute()
-        
-        file_url_result = f"https://drive.google.com/file/d/{file_id}/view"
-        return file_url_result, None
+        sheet = get_sheet()
+        data = sheet.get_all_values()
+        if len(data) <= 1:
+            return []
+        # Пропускаем заголовок, берём только название фонда (колонка 0)
+        funds = [row[0] for row in data[1:] if len(row) > 0 and row[0].strip()]
+        return funds
     except Exception as e:
-        logging.error(f"Ошибка загрузки фото: {e}")
-        return None, str(e)
+        logging.error(f"Ошибка получения фондов: {e}")
+        return []
 
-def save_photo_to_sheet(user_name, photo_url):
-    """Сохраняет информацию о фото в лист 'Фото'"""
+def add_fund(fund_name, rating):
+    """Добавить новый фонд с оценкой"""
     try:
-        sheet = get_sheet("Фото")
+        sheet = get_sheet()
         now = datetime.now()
         sheet.append_row([
-            now.strftime("%d.%m.%Y"),
-            now.strftime("%H:%M:%S"),
-            user_name,
-            photo_url
+            fund_name,
+            rating,
+            now.strftime("%d.%m.%Y %H:%M:%S"),
+            "Активен"
         ])
+        logging.info(f"Добавлен фонд: {fund_name} с оценкой {rating}")
         return True
     except Exception as e:
-        logging.error(f"Ошибка сохранения фото в таблицу: {e}")
+        logging.error(f"Ошибка добавления фонда: {e}")
         return False
 
-def get_price(product_name):
-    """Получает себестоимость продукта из листа 'Прайс'"""
+def delete_fund(fund_name):
+    """Удалить фонд по названию"""
     try:
-        prices_sheet = get_sheet("Прайс")
-        all_prices = prices_sheet.get_all_values()
-        for row in all_prices[1:]:
-            if len(row) >= 2 and row[0] == product_name:
-                try:
-                    return float(row[1])
-                except:
-                    return 0
-        return 0
+        sheet = get_sheet()
+        data = sheet.get_all_values()
+        for i, row in enumerate(data):
+            if len(row) > 0 and row[0] == fund_name:
+                sheet.delete_rows(i + 1)  # +1 потому что индексация с 1
+                logging.info(f"Удалён фонд: {fund_name}")
+                return True
+        return False
     except Exception as e:
-        logging.error(f"Ошибка получения цены: {e}")
-        return 0
+        logging.error(f"Ошибка удаления фонда: {e}")
+        return False
 
-def save_to_sheet(user_name, product, quantity):
-    """Сохраняет списание с расчётом убытка"""
+def get_all_ratings():
+    """Получить все оценки по фондам"""
     try:
-        sheet = get_sheet("СПИСАНИЕ")
-        price = get_price(product)
-        loss = price * quantity
-        now = datetime.now()
-        sheet.append_row([
-            now.strftime("%d.%m.%Y"),
-            now.strftime("%H:%M:%S"),
-            user_name,
-            product,
-            str(quantity),
-            str(price),
-            str(loss)
-        ])
-        logging.info(f"Сохранено: {user_name} - {product} - {quantity} шт, убыток: {loss} ₸")
-        return True, loss
+        sheet = get_sheet()
+        data = sheet.get_all_values()
+        if len(data) <= 1:
+            return []
+        # Пропускаем заголовок
+        ratings = []
+        for row in data[1:]:
+            if len(row) >= 2 and row[0].strip():
+                ratings.append({
+                    'name': row[0],
+                    'rating': row[1] if len(row) > 1 else 'Нет оценки',
+                    'date': row[2] if len(row) > 2 else 'Нет даты',
+                    'status': row[3] if len(row) > 3 else 'Активен'
+                })
+        return ratings
     except Exception as e:
-        logging.error(f"Ошибка Google Sheets: {e}")
-        return False, 0
+        logging.error(f"Ошибка получения оценок: {e}")
+        return []
 
 # ========================
-# ОТПРАВКА СООБЩЕНИЙ И МЕНЮ
+# ОТПРАВКА СООБЩЕНИЙ
 # ========================
 
 def send_message(chat_id, text, reply_markup=None):
     try:
-        payload = {"chat_id": chat_id, "text": text}
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
         if reply_markup:
             payload["reply_markup"] = reply_markup
         requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload)
@@ -174,237 +113,14 @@ def send_message(chat_id, text, reply_markup=None):
 def send_main_menu(chat_id):
     keyboard = {
         "keyboard": [
-            ["🥐 Круассан", "🥪 Панини"],
-            ["🥐 Слойка", "🥯 Бейгл"],
-            ["🍲 Киш", "🍙 Онигири"],
-            ["🌮 Кесадилья", "🌯 Тортилья"],
-            ["🍰 Торт нап-мед", "🥗 Боул"],
-            ["🍱 Ролл", "📊 Отчёты"],
-            ["📸 Фото", "➕ Другое"]
+            ["➕ Добавить фонд"],
+            ["❌ Удалить фонд"],
+            ["📋 Шорт-лист"],
+            ["⭐ Посмотреть оценки"]
         ],
         "resize_keyboard": True
     }
-    send_message(chat_id, "🍽 ВЫБЕРИТЕ КАТЕГОРИЮ:", reply_markup=keyboard)
-
-# ========================
-# ПОДМЕНЮ КАТЕГОРИЙ
-# ========================
-
-def send_croissant_menu(chat_id):
-    keyboard = {
-        "keyboard": [
-            ["🥐 Круассан миндаль"],
-            ["🥐 Круассан шоколад"],
-            ["🥐 Круассан курица"],
-            ["🥐 Круассан индейка"],
-            ["◀️ Назад"]
-        ],
-        "resize_keyboard": True
-    }
-    send_message(chat_id, "🥐 ВЫБЕРИТЕ КРУАССАН:", reply_markup=keyboard)
-
-def send_panini_menu(chat_id):
-    keyboard = {
-        "keyboard": [
-            ["🥪 Панини курица"],
-            ["🥪 Панини индейка"],
-            ["◀️ Назад"]
-        ],
-        "resize_keyboard": True
-    }
-    send_message(chat_id, "🥪 ВЫБЕРИТЕ ПАНИНИ:", reply_markup=keyboard)
-
-def send_sloika_menu(chat_id):
-    keyboard = {
-        "keyboard": [
-            ["🥐 Слойка индейка"],
-            ["◀️ Назад"]
-        ],
-        "resize_keyboard": True
-    }
-    send_message(chat_id, "🥐 ВЫБЕРИТЕ СЛОЙКУ:", reply_markup=keyboard)
-
-def send_bagel_menu(chat_id):
-    keyboard = {
-        "keyboard": [
-            ["🥯 Бейгл индейка"],
-            ["🥯 Бейгл курица"],
-            ["◀️ Назад"]
-        ],
-        "resize_keyboard": True
-    }
-    send_message(chat_id, "🥯 ВЫБЕРИТЕ БЕЙГЛ:", reply_markup=keyboard)
-
-def send_bowl_menu(chat_id):
-    keyboard = {
-        "keyboard": [
-            ["🥗 Боул сёмга"],
-            ["🥗 Боул курица"],
-            ["🥗 Боул цезарь"],
-            ["🥗 Боул фитнесс"],
-            ["◀️ Назад"]
-        ],
-        "resize_keyboard": True
-    }
-    send_message(chat_id, "🥗 ВЫБЕРИТЕ БОУЛ:", reply_markup=keyboard)
-
-def send_roll_menu(chat_id):
-    keyboard = {
-        "keyboard": [
-            ["🍱 Ролл курица"],
-            ["◀️ Назад"]
-        ],
-        "resize_keyboard": True
-    }
-    send_message(chat_id, "🍱 ВЫБЕРИТЕ РОЛЛ:", reply_markup=keyboard)
-
-# ========================
-# МЕНЮ ОТЧЁТОВ
-# ========================
-
-def send_reports_menu(chat_id):
-    keyboard = {
-        "keyboard": [
-            ["📆 За текущую неделю"],
-            ["📅 За месяц"],
-            ["◀️ Назад"]
-        ],
-        "resize_keyboard": True
-    }
-    send_message(chat_id, "📊 ВЫБЕРИТЕ ТИП ОТЧЁТА:", reply_markup=keyboard)
-
-def send_month_selection(chat_id):
-    months_kb = []
-    row = []
-    for i, month in enumerate(MONTHS):
-        row.append(month)
-        if len(row) == 3 or i == len(MONTHS)-1:
-            months_kb.append(row.copy())
-            row = []
-    months_kb.append(["◀️ Назад"])
-    keyboard = {"keyboard": months_kb, "resize_keyboard": True}
-    send_message(chat_id, "🗓 ВЫБЕРИТЕ МЕСЯЦ:", reply_markup=keyboard)
-
-def send_week_selection(chat_id, month_name, year):
-    month_num = MONTHS.index(month_name) + 1
-    last_day = calendar.monthrange(year, month_num)[1]
-    
-    weeks = []
-    week_start = 1
-    while week_start <= last_day:
-        week_end = min(week_start + 6, last_day)
-        weeks.append((week_start, week_end))
-        week_start += 7
-    
-    keyboard = []
-    for ws, we in weeks:
-        if ws == we:
-            keyboard.append([f"{ws} {month_name}"])
-        else:
-            keyboard.append([f"{ws}-{we} {month_name}"])
-    
-    if last_day > 28:
-        last_week_end = weeks[-1][1]
-        if last_week_end < last_day:
-            keyboard.append([f"{last_week_end+1}-{last_day} {month_name}"])
-    
-    keyboard.append(["Весь месяц", "◀️ Назад"])
-    keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
-    send_message(chat_id, f"🗓 {month_name.upper()} {year} — ВЫБЕРИТЕ НЕДЕЛЮ:", reply_markup=keyboard_obj)
-
-# ========================
-# ФУНКЦИИ ОТЧЁТОВ
-# ========================
-
-def send_weekly_report(chat_id):
-    try:
-        sheet = get_sheet("СПИСАНИЕ")
-        data = sheet.get_all_values()
-        if len(data) <= 1:
-            send_message(chat_id, "📭 За неделю списаний нет")
-            return
-        
-        week_ago = datetime.now() - timedelta(days=7)
-        stats = {}
-        total_loss = 0
-        
-        for row in data[1:]:
-            if len(row) >= 7:
-                try:
-                    row_date = datetime.strptime(row[0], "%d.%m.%Y")
-                    if row_date >= week_ago:
-                        product = row[3]
-                        quantity = float(row[4])
-                        loss = float(row[6])
-                        if product not in stats:
-                            stats[product] = {"quantity": 0, "loss": 0}
-                        stats[product]["quantity"] += quantity
-                        stats[product]["loss"] += loss
-                        total_loss += loss
-                except:
-                    continue
-        
-        if not stats:
-            send_message(chat_id, "📭 За последнюю неделю списаний нет")
-            return
-        
-        report = "📊 ОТЧЁТ ЗА НЕДЕЛЮ\n\n"
-        for product, data in stats.items():
-            report += f"{product}: {data['quantity']} шт — {data['loss']:.0f} ₸\n"
-        report += f"\n💰 ИТОГО УБЫТОК: {total_loss:.0f} ₸"
-        send_message(chat_id, report)
-    except Exception as e:
-        logging.error(f"Ошибка отчёта: {e}")
-        send_message(chat_id, "❌ Ошибка формирования отчёта")
-
-def send_monthly_report(chat_id, month_name, year, week_range=None):
-    try:
-        sheet = get_sheet("СПИСАНИЕ")
-        data = sheet.get_all_values()
-        if len(data) <= 1:
-            send_message(chat_id, "📭 За указанный период списаний нет")
-            return
-        
-        month_num = MONTHS.index(month_name) + 1
-        stats = {}
-        total_loss = 0
-        
-        for row in data[1:]:
-            if len(row) >= 7:
-                try:
-                    row_date = datetime.strptime(row[0], "%d.%m.%Y")
-                    if row_date.year == year and row_date.month == month_num:
-                        if week_range:
-                            day = row_date.day
-                            if not (week_range[0] <= day <= week_range[1]):
-                                continue
-                        product = row[3]
-                        quantity = float(row[4])
-                        loss = float(row[6])
-                        if product not in stats:
-                            stats[product] = {"quantity": 0, "loss": 0}
-                        stats[product]["quantity"] += quantity
-                        stats[product]["loss"] += loss
-                        total_loss += loss
-                except:
-                    continue
-        
-        if not stats:
-            send_message(chat_id, "📭 За указанный период списаний нет")
-            return
-        
-        if week_range:
-            report = f"📊 ОТЧЁТ ЗА {week_range[0]}-{week_range[1]} {month_name} {year}\n\n"
-        else:
-            report = f"📊 ОТЧЁТ ЗА {month_name} {year}\n\n"
-        
-        for product, data in stats.items():
-            report += f"{product}: {data['quantity']} шт — {data['loss']:.0f} ₸\n"
-        report += f"\n💰 ИТОГО УБЫТОК: {total_loss:.0f} ₸"
-        send_message(chat_id, report)
-    except Exception as e:
-        logging.error(f"Ошибка отчёта: {e}")
-        send_message(chat_id, "❌ Ошибка формирования отчёта")
+    send_message(chat_id, "🏦 УПРАВЛЕНИЕ ФОНДАМИ\n\nВыберите действие:", reply_markup=keyboard)
 
 # ========================
 # ОСНОВНОЙ WEBHOOK
@@ -419,185 +135,100 @@ def webhook():
             text = update["message"].get("text", "")
             user_name = update["message"]["from"].get("first_name", "Гость")
             
-            # ---- КОМАНДЫ ----
+            # ---- КОМАНДА START ----
             if text == "/start":
                 send_main_menu(chat_id)
             
-            # ---- КАТЕГОРИИ ----
-            elif text == "🥐 Круассан":
-                send_croissant_menu(chat_id)
-            elif text == "🥪 Панини":
-                send_panini_menu(chat_id)
-            elif text == "🥐 Слойка":
-                send_sloika_menu(chat_id)
-            elif text == "🥯 Бейгл":
-                send_bagel_menu(chat_id)
-            elif text == "🍲 Киш":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": "Киш курица"}
-                send_message(chat_id, "📝 Введите количество для Киш курица:")
-            elif text == "🍙 Онигири":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": "Онигири"}
-                send_message(chat_id, "📝 Введите количество для Онигири:")
-            elif text == "🌮 Кесадилья":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": "Кесадилья"}
-                send_message(chat_id, "📝 Введите количество для Кесадилья:")
-            elif text == "🌯 Тортилья":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": "Тортилья"}
-                send_message(chat_id, "📝 Введите количество для Тортилья:")
-            elif text == "🍰 Торт нап-мед":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": "Торт нап-мед"}
-                send_message(chat_id, "📝 Введите количество для Торт нап-мед:")
-            elif text == "🥗 Боул":
-                send_bowl_menu(chat_id)
-            elif text == "🍱 Ролл":
-                send_roll_menu(chat_id)
+            # ---- ДОБАВИТЬ ФОНД ----
+            elif text == "➕ Добавить фонд":
+                user_data[chat_id] = {"step": "add_fund_name"}
+                send_message(chat_id, "📝 Введите НАЗВАНИЕ фонда:")
             
-            # ---- ОТЧЁТЫ ----
-            elif text == "📊 Отчёты":
-                send_reports_menu(chat_id)
-            elif text == "📆 За текущую неделю":
-                send_weekly_report(chat_id)
-            elif text == "📅 За месяц":
-                send_month_selection(chat_id)
+            elif chat_id in user_data and user_data[chat_id].get("step") == "add_fund_name":
+                fund_name = text.strip()
+                user_data[chat_id] = {"step": "add_fund_rating", "fund_name": fund_name}
+                send_message(chat_id, f"📊 Введите ОЦЕНКУ для {fund_name} (число от 1 до 10):")
             
-            # ---- ФОТО ----
-            elif text == "📸 Фото":
-                user_data[chat_id] = {"waiting_for": "photo"}
-                send_message(chat_id, "📸 Отправьте фото списания")
+            elif chat_id in user_data and user_data[chat_id].get("step") == "add_fund_rating":
+                try:
+                    rating = float(text.replace(",", "."))
+                    fund_name = user_data[chat_id]["fund_name"]
+                    
+                    if add_fund(fund_name, rating):
+                        send_message(chat_id, f"✅ Фонд <b>{fund_name}</b> добавлен с оценкой {rating}")
+                    else:
+                        send_message(chat_id, "❌ Ошибка добавления фонда")
+                    
+                    del user_data[chat_id]
+                    send_main_menu(chat_id)
+                except ValueError:
+                    send_message(chat_id, "❌ Оценка должна быть числом. Попробуйте ещё раз:")
             
-            # ---- ПРОДУКТЫ  ----
-            elif text in ["🥐 Круассан миндаль", "🥐 Круассан шоколад", "🥐 Круассан курица", "🥐 Круассан индейка"]:
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            
-            elif text in ["🥪 Панини курица", "🥪 Панини индейка"]:
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            
-            elif text == "🥐 Слойка индейка":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            
-            elif text in ["🥯 Бейгл индейка", "🥯 Бейгл курица"]:
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            
-            elif text in ["🥗 Боул сёмга", "🥗 Боул курица", "🥗 Боул цезарь", "🥗 Боул фитнесс"]:
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            
-            elif text == "🍱 Ролл курица":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            
-            # ---- ВЫБОР МЕСЯЦА ----
-            elif text in MONTHS:
-                current_year = datetime.now().year
-                user_data[chat_id] = {"waiting_for": "week_in_month", "month": text, "year": current_year}
-                send_week_selection(chat_id, text, current_year)
-            
-            # ---- ВЫБОР НЕДЕЛИ В МЕСЯЦЕ ----
-            elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "week_in_month":
-                month = user_data[chat_id]["month"]
-                year = user_data[chat_id]["year"]
+            # ---- УДАЛИТЬ ФОНД ----
+            elif text == "❌ Удалить фонд":
+                funds = get_all_funds()
+                if not funds:
+                    send_message(chat_id, "📭 Нет активных фондов для удаления")
+                    send_main_menu(chat_id)
+                    return
                 
-                if text == "Весь месяц":
-                    send_monthly_report(chat_id, month, year)
+                # Создаём клавиатуру со списком фондов
+                keyboard = {"keyboard": [[fund] for fund in funds] + [["◀️ Назад"]], "resize_keyboard": True}
+                send_message(chat_id, "❌ Выберите фонд для удаления:", reply_markup=keyboard)
+                user_data[chat_id] = {"step": "delete_fund_select"}
+            
+            elif chat_id in user_data and user_data[chat_id].get("step") == "delete_fund_select":
+                if text == "◀️ Назад":
                     del user_data[chat_id]
-                    send_reports_menu(chat_id)
-                elif " " in text and text.split(" ")[0].isdigit():
-                    week_part = text.split(" ")[0]
-                    if "-" in week_part:
-                        start, end = map(int, week_part.split("-"))
-                        send_monthly_report(chat_id, month, year, (start, end))
-                        del user_data[chat_id]
-                        send_reports_menu(chat_id)
-                    else:
-                        send_message(chat_id, "❌ Ошибка формата")
+                    send_main_menu(chat_id)
+                    return
+                
+                fund_name = text.strip()
+                if delete_fund(fund_name):
+                    send_message(chat_id, f"✅ Фонд <b>{fund_name}</b> удалён")
                 else:
-                    send_message(chat_id, "❌ Пожалуйста, выберите неделю из меню")
+                    send_message(chat_id, f"❌ Фонд <b>{fund_name}</b> не найден")
+                
+                del user_data[chat_id]
+                send_main_menu(chat_id)
             
-            # ---- ОБРАБОТКА КОЛИЧЕСТВА ----
-            elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "quantity":
-                try:
-                    quantity = float(text.replace(",", "."))
-                    product = user_data[chat_id]["product"]
-                    success, loss = save_to_sheet(user_name, product, quantity)
-                    if success:
-                        send_message(chat_id, f"✅ Списано: {product} — {quantity} шт\n💰 Убыток: {loss:.0f} ₸")
-                    else:
-                        send_message(chat_id, "❌ Ошибка сохранения в таблицу")
-                    del user_data[chat_id]
-                    send_main_menu(chat_id)
-                except ValueError:
-                    send_message(chat_id, "❌ Введите число, например: 2 или 1.5")
+            # ---- ШОРТ-ЛИСТ ----
+            elif text == "📋 Шорт-лист":
+                funds = get_all_funds()
+                if not funds:
+                    send_message(chat_id, "📭 Фонды не найдены")
+                else:
+                    # Формируем красивый список с номерами
+                    short_list = "📋 <b>ШОРТ-ЛИСТ ФОНДОВ</b>\n\n"
+                    for i, fund in enumerate(funds, 1):
+                        short_list += f"{i}. {fund}\n"
+                    send_message(chat_id, short_list)
+                send_main_menu(chat_id)
             
-            # ---- РУЧНОЙ ВВОД (Другое) ----
-            elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "other_product":
-                product = text
-                user_data[chat_id] = {"waiting_for": "quantity_other", "product": product}
-                send_message(chat_id, f"📝 Введите количество для {product}:")
+            # ---- ПОСМОТРЕТЬ ОЦЕНКИ ----
+            elif text == "⭐ Посмотреть оценки":
+                ratings = get_all_ratings()
+                if not ratings:
+                    send_message(chat_id, "📭 Оценки не найдены")
+                else:
+                    # Формируем таблицу с оценками
+                    rating_list = "⭐ <b>ОЦЕНКИ ФОНДОВ</b>\n\n"
+                    for item in ratings:
+                        rating_list += f"📌 {item['name']}\n"
+                        rating_list += f"   Оценка: <b>{item['rating']}</b>\n"
+                        rating_list += f"   Дата: {item['date']}\n"
+                        rating_list += f"   Статус: {item['status']}\n\n"
+                    send_message(chat_id, rating_list)
+                send_main_menu(chat_id)
             
-            elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "quantity_other":
-                try:
-                    quantity = float(text.replace(",", "."))
-                    product = user_data[chat_id]["product"]
-                    success, loss = save_to_sheet(user_name, product, quantity)
-                    if success:
-                        send_message(chat_id, f"✅ Списано: {product} — {quantity} шт\n💰 Убыток: {loss:.0f} ₸")
-                    else:
-                        send_message(chat_id, "❌ Ошибка сохранения в таблицу")
-                    del user_data[chat_id]
-                    send_main_menu(chat_id)
-                except ValueError:
-                    send_message(chat_id, "❌ Введите число, например: 2 или 1.5")
-            
-            elif text == "➕ Другое":
-                user_data[chat_id] = {"waiting_for": "other_product"}
-                send_message(chat_id, "✏️ Напишите название позиции:")
-            
+            # ---- НАЗАД ----
             elif text == "◀️ Назад":
-                if chat_id in user_data and "waiting_for" in user_data[chat_id]:
-                    if user_data[chat_id].get("waiting_for") in ["week_in_month"]:
-                        del user_data[chat_id]
-                        send_reports_menu(chat_id)
-                    else:
-                        send_main_menu(chat_id)
-                else:
-                    send_main_menu(chat_id)
+                if chat_id in user_data:
+                    del user_data[chat_id]
+                send_main_menu(chat_id)
             
             else:
                 send_message(chat_id, "❌ Используйте кнопки меню")
-        
-        # ---- ОБРАБОТКА ФОТО ----
-        elif "photo" in update:
-            chat_id = update["message"]["chat"]["id"]
-            user_name = update["message"]["from"].get("first_name", "Гость")
-            
-            if chat_id in user_data and user_data[chat_id].get("waiting_for") == "photo":
-                try:
-                    photos = update["message"]["photo"]
-                    largest_photo = photos[-1]
-                    file_id = largest_photo["file_id"]
-                    
-                    file_info = requests.get(f"{TELEGRAM_API_URL}/getFile?file_id={file_id}").json()
-                    file_path = file_info["result"]["file_path"]
-                    file_url = f"{TELEGRAM_API_URL}/file/{file_path}"
-                    
-                    photo_url, error = upload_photo_to_drive(file_url, user_name)
-                    
-                    if photo_url and save_photo_to_sheet(user_name, photo_url):
-                        send_message(chat_id, "✅ Фото сохранено!\n📎 Ссылка: " + photo_url)
-                    else:
-                        send_message(chat_id, f"❌ Ошибка сохранения фото: {error}")
-                    
-                    del user_data[chat_id]
-                    send_main_menu(chat_id)
-                except Exception as e:
-                    logging.error(f"Ошибка обработки фото: {e}")
-                    send_message(chat_id, "❌ Ошибка обработки фото. Попробуйте ещё раз.")
-            else:
-                send_message(chat_id, "❌ Сначала нажмите кнопку 📸 Фото")
         
         return jsonify({"status": "ok"}), 200
     except Exception as e:
@@ -606,68 +237,8 @@ def webhook():
 
 @app.route('/', methods=['GET'])
 def index():
-    try:
-        with open('index.html', 'r', encoding='utf-8') as f:
-            return f.read()
-    except FileNotFoundError:
-        return "Файл index.html не найден. Убедитесь, что он в папке проекта.", 404
-    
+    return "Бот управления фондами работает!", 200
 
-@app.route('/api/weekly-stats', methods=['GET'])
-def weekly_stats():
-    """Возвращает JSON для графика списаний за неделю"""
-    try:
-        sheet = get_sheet("СПИСАНИЕ")
-        data = sheet.get_all_values()
-        
-        if len(data) <= 1:
-            return jsonify({"labels": [], "values": [], "totalLoss": 0, "totalItems": 0})
-        
-        from datetime import datetime, timedelta
-        week_ago = datetime.now() - timedelta(days=7)
-        
-        days_map = {}
-        total_loss = 0
-        total_items = 0
-        
-        for row in data[1:]:
-            if len(row) >= 7:
-                try:
-                    row_date = datetime.strptime(row[0], "%d.%m.%Y")
-                    if row_date >= week_ago:
-                        day_key = row_date.strftime("%a")
-                        loss = float(row[6])
-                        quantity = float(row[4])
-                        
-                        if day_key not in days_map:
-                            days_map[day_key] = 0
-                        days_map[day_key] += loss
-                        total_loss += loss
-                        total_items += quantity
-                except:
-                    continue
-        
-        day_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-        day_names_ru = {'Mon': 'Пн', 'Tue': 'Вт', 'Wed': 'Ср', 'Thu': 'Чт', 'Fri': 'Пт', 'Sat': 'Сб', 'Sun': 'Вс'}
-        
-        labels = []
-        values = []
-        for day in day_order:
-            ru_day = day_names_ru.get(day, day)
-            labels.append(ru_day)
-            values.append(days_map.get(ru_day, 0))
-        
-        return jsonify({
-            "labels": labels,
-            "values": values,
-            "totalLoss": round(total_loss, 0),
-            "totalItems": round(total_items, 0)
-        })
-        
-    except Exception as e:
-        logging.error(f"Ошибка API статистики: {e}")
-        return jsonify({"error": str(e)}), 500 
-    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
