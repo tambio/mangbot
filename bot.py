@@ -81,7 +81,6 @@ def send_message(chat_id, text, reply_markup=None):
         logging.error(f"Ошибка отправки: {e}")
 
 def send_photo_to_group(file_id, caption):
-    """Отправляет фото в группу"""
     try:
         url = f"{TELEGRAM_API_URL}/sendPhoto"
         payload = {
@@ -90,7 +89,7 @@ def send_photo_to_group(file_id, caption):
             "caption": caption
         }
         r = requests.post(url, json=payload)
-        logging.info(f"Фото в группу отправлено: {r.status_code} — {r.text[:200]}")
+        logging.info(f"Фото в группу: {r.status_code} — {r.text[:200]}")
         return r.status_code == 200
     except Exception as e:
         logging.error(f"Ошибка отправки фото в группу: {e}")
@@ -284,162 +283,29 @@ def send_monthly_report(chat_id, month_name, year, week_range=None):
 def webhook():
     try:
         update = request.get_json()
-        if "message" in update:
-            chat_id = update["message"]["chat"]["id"]
-            text = update["message"].get("text", "")
-            user_name = update["message"]["from"].get("first_name", "Гость")
 
-            if text == "/start":
-                send_main_menu(chat_id)
+        if "message" not in update:
+            return jsonify({"status": "ok"}), 200
 
-            elif text == "🥐 Круассан":
-                send_croissant_menu(chat_id)
-            elif text == "🥪 Панини":
-                send_panini_menu(chat_id)
-            elif text == "🥐 Слойка":
-                send_sloika_menu(chat_id)
-            elif text == "🥯 Бейгл":
-                send_bagel_menu(chat_id)
-            elif text == "🍲 Киш":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": "Киш курица"}
-                send_message(chat_id, "📝 Введите количество для Киш курица:")
-            elif text == "🍙 Онигири":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": "Онигири"}
-                send_message(chat_id, "📝 Введите количество для Онигири:")
-            elif text == "🌮 Кесадилья":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": "Кесадилья"}
-                send_message(chat_id, "📝 Введите количество для Кесадилья:")
-            elif text == "🌯 Тортилья":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": "Тортилья"}
-                send_message(chat_id, "📝 Введите количество для Тортилья:")
-            elif text == "🍰 Торт нап-мед":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": "Торт нап-мед"}
-                send_message(chat_id, "📝 Введите количество для Торт нап-мед:")
-            elif text == "🥗 Боул":
-                send_bowl_menu(chat_id)
-            elif text == "🍱 Ролл":
-                send_roll_menu(chat_id)
+        chat_id = update["message"]["chat"]["id"]
+        user_name = update["message"]["from"].get("first_name", "Гость")
 
-            elif text == "📊 Отчёты":
-                send_reports_menu(chat_id)
-            elif text == "📆 За текущую неделю":
-                send_weekly_report(chat_id)
-            elif text == "📅 За месяц":
-                send_month_selection(chat_id)
-
-            # ---- ОБСТАНОВКА НА ТОЧКЕ ----
-            elif text == "📸 Обстановка на точке":
-                user_data[chat_id] = {"waiting_for": "point_photo"}
-                send_message(chat_id, "📸 Отправьте фото обстановки на точке:")
-
-            # ---- ПРОДУКТЫ ----
-            elif text in ["🥐 Круассан миндаль", "🥐 Круассан шоколад", "🥐 Круассан курица", "🥐 Круассан индейка"]:
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            elif text in ["🥪 Панини курица", "🥪 Панини индейка"]:
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            elif text == "🥐 Слойка индейка":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            elif text in ["🥯 Бейгл индейка", "🥯 Бейгл курица"]:
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            elif text in ["🥗 Боул сёмга", "🥗 Боул курица", "🥗 Боул цезарь", "🥗 Боул фитнесс"]:
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-            elif text == "🍱 Ролл курица":
-                user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-                send_message(chat_id, f"📝 Введите количество для {text}:")
-
-            # ---- ВЫБОР МЕСЯЦА ----
-            elif text in MONTHS:
-                current_year = datetime.now().year
-                user_data[chat_id] = {"waiting_for": "week_in_month", "month": text, "year": current_year}
-                send_week_selection(chat_id, text, current_year)
-
-            elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "week_in_month":
-                month = user_data[chat_id]["month"]
-                year = user_data[chat_id]["year"]
-                if text == "Весь месяц":
-                    send_monthly_report(chat_id, month, year)
-                    del user_data[chat_id]
-                    send_reports_menu(chat_id)
-                elif " " in text and text.split(" ")[0].split("-")[0].isdigit():
-                    week_part = text.split(" ")[0]
-                    if "-" in week_part:
-                        start, end = map(int, week_part.split("-"))
-                        send_monthly_report(chat_id, month, year, (start, end))
-                    else:
-                        d = int(week_part)
-                        send_monthly_report(chat_id, month, year, (d, d))
-                    del user_data[chat_id]
-                    send_reports_menu(chat_id)
-
-            # ---- КОЛИЧЕСТВО ----
-            elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "quantity":
-                try:
-                    quantity = float(text.replace(",", "."))
-                    product = user_data[chat_id]["product"]
-                    success, loss = save_to_sheet(user_name, product, quantity)
-                    if success:
-                        send_message(chat_id, f"✅ Списано: {product} — {quantity} шт\n💰 Убыток: {loss:.0f} ₸")
-                    else:
-                        send_message(chat_id, "❌ Ошибка сохранения")
-                    del user_data[chat_id]
-                    send_main_menu(chat_id)
-                except ValueError:
-                    send_message(chat_id, "❌ Введите число:")
-
-            elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "other_product":
-                product = text
-                user_data[chat_id] = {"waiting_for": "quantity_other", "product": product}
-                send_message(chat_id, f"📝 Введите количество для {product}:")
-
-            elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "quantity_other":
-                try:
-                    quantity = float(text.replace(",", "."))
-                    product = user_data[chat_id]["product"]
-                    success, loss = save_to_sheet(user_name, product, quantity)
-                    if success:
-                        send_message(chat_id, f"✅ Списано: {product} — {quantity} шт\n💰 Убыток: {loss:.0f} ₸")
-                    else:
-                        send_message(chat_id, "❌ Ошибка сохранения")
-                    del user_data[chat_id]
-                    send_main_menu(chat_id)
-                except ValueError:
-                    send_message(chat_id, "❌ Введите число:")
-
-            elif text == "➕ Другое":
-                user_data[chat_id] = {"waiting_for": "other_product"}
-                send_message(chat_id, "✏️ Напишите название позиции:")
-
-            elif text == "◀️ Назад":
-                if chat_id in user_data:
-                    del user_data[chat_id]
-                send_main_menu(chat_id)
-
-            else:
-                send_message(chat_id, "❌ Используйте кнопки меню")
-
-        # ---- ОБРАБОТКА ФОТО ----
-        elif "photo" in update:
-            chat_id = update["message"]["chat"]["id"]
-            user_name = update["message"]["from"].get("first_name", "Гость")
+        # ===== ЕСЛИ ПРИШЛО ФОТО =====
+        if "photo" in update["message"]:
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "point_photo":
                 try:
                     photos = update["message"]["photo"]
                     largest_photo = photos[-1]
                     file_id = largest_photo["file_id"]
-                    
+
                     now = datetime.now()
                     caption = f"📸 Обстановка на точке\n👤 {user_name}\n🕐 {now.strftime('%d.%m.%Y %H:%M')}"
-                    
+
                     if send_photo_to_group(file_id, caption):
                         send_message(chat_id, "✅ Фото отправлено в группу!")
                     else:
                         send_message(chat_id, "❌ Ошибка отправки в группу")
-                    
+
                     del user_data[chat_id]
                     send_main_menu(chat_id)
                 except Exception as e:
@@ -447,6 +313,139 @@ def webhook():
                     send_message(chat_id, "❌ Ошибка обработки фото")
             else:
                 send_message(chat_id, "❌ Сначала нажмите 📸 Обстановка на точке")
+            return jsonify({"status": "ok"}), 200
+
+        # ===== ТЕКСТОВЫЕ СООБЩЕНИЯ =====
+        text = update["message"].get("text", "")
+
+        if text == "/start":
+            send_main_menu(chat_id)
+        elif text == "🥐 Круассан":
+            send_croissant_menu(chat_id)
+        elif text == "🥪 Панини":
+            send_panini_menu(chat_id)
+        elif text == "🥐 Слойка":
+            send_sloika_menu(chat_id)
+        elif text == "🥯 Бейгл":
+            send_bagel_menu(chat_id)
+        elif text == "🍲 Киш":
+            user_data[chat_id] = {"waiting_for": "quantity", "product": "Киш курица"}
+            send_message(chat_id, "📝 Введите количество для Киш курица:")
+        elif text == "🍙 Онигири":
+            user_data[chat_id] = {"waiting_for": "quantity", "product": "Онигири"}
+            send_message(chat_id, "📝 Введите количество для Онигири:")
+        elif text == "🌮 Кесадилья":
+            user_data[chat_id] = {"waiting_for": "quantity", "product": "Кесадилья"}
+            send_message(chat_id, "📝 Введите количество для Кесадилья:")
+        elif text == "🌯 Тортилья":
+            user_data[chat_id] = {"waiting_for": "quantity", "product": "Тортилья"}
+            send_message(chat_id, "📝 Введите количество для Тортилья:")
+        elif text == "🍰 Торт нап-мед":
+            user_data[chat_id] = {"waiting_for": "quantity", "product": "Торт нап-мед"}
+            send_message(chat_id, "📝 Введите количество для Торт нап-мед:")
+        elif text == "🥗 Боул":
+            send_bowl_menu(chat_id)
+        elif text == "🍱 Ролл":
+            send_roll_menu(chat_id)
+        elif text == "📊 Отчёты":
+            send_reports_menu(chat_id)
+        elif text == "📆 За текущую неделю":
+            send_weekly_report(chat_id)
+        elif text == "📅 За месяц":
+            send_month_selection(chat_id)
+        elif text == "📸 Обстановка на точке":
+            user_data[chat_id] = {"waiting_for": "point_photo"}
+            send_message(chat_id, "📸 Отправьте фото обстановки на точке:")
+
+        # Продукты
+        elif text in ["🥐 Круассан миндаль", "🥐 Круассан шоколад", "🥐 Круассан курица", "🥐 Круассан индейка"]:
+            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
+            send_message(chat_id, f"📝 Введите количество для {text}:")
+        elif text in ["🥪 Панини курица", "🥪 Панини индейка"]:
+            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
+            send_message(chat_id, f"📝 Введите количество для {text}:")
+        elif text == "🥐 Слойка индейка":
+            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
+            send_message(chat_id, f"📝 Введите количество для {text}:")
+        elif text in ["🥯 Бейгл индейка", "🥯 Бейгл курица"]:
+            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
+            send_message(chat_id, f"📝 Введите количество для {text}:")
+        elif text in ["🥗 Боул сёмга", "🥗 Боул курица", "🥗 Боул цезарь", "🥗 Боул фитнесс"]:
+            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
+            send_message(chat_id, f"📝 Введите количество для {text}:")
+        elif text == "🍱 Ролл курица":
+            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
+            send_message(chat_id, f"📝 Введите количество для {text}:")
+
+        # Месяц
+        elif text in MONTHS:
+            current_year = datetime.now().year
+            user_data[chat_id] = {"waiting_for": "week_in_month", "month": text, "year": current_year}
+            send_week_selection(chat_id, text, current_year)
+
+        elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "week_in_month":
+            month = user_data[chat_id]["month"]
+            year = user_data[chat_id]["year"]
+            if text == "Весь месяц":
+                send_monthly_report(chat_id, month, year)
+                del user_data[chat_id]
+                send_reports_menu(chat_id)
+            elif " " in text and text.split(" ")[0].split("-")[0].isdigit():
+                week_part = text.split(" ")[0]
+                if "-" in week_part:
+                    start, end = map(int, week_part.split("-"))
+                    send_monthly_report(chat_id, month, year, (start, end))
+                else:
+                    d = int(week_part)
+                    send_monthly_report(chat_id, month, year, (d, d))
+                del user_data[chat_id]
+                send_reports_menu(chat_id)
+
+        # Количество
+        elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "quantity":
+            try:
+                quantity = float(text.replace(",", "."))
+                product = user_data[chat_id]["product"]
+                success, loss = save_to_sheet(user_name, product, quantity)
+                if success:
+                    send_message(chat_id, f"✅ Списано: {product} — {quantity} шт\n💰 Убыток: {loss:.0f} ₸")
+                else:
+                    send_message(chat_id, "❌ Ошибка сохранения")
+                del user_data[chat_id]
+                send_main_menu(chat_id)
+            except ValueError:
+                send_message(chat_id, "❌ Введите число:")
+
+        elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "other_product":
+            product = text
+            user_data[chat_id] = {"waiting_for": "quantity_other", "product": product}
+            send_message(chat_id, f"📝 Введите количество для {product}:")
+
+        elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "quantity_other":
+            try:
+                quantity = float(text.replace(",", "."))
+                product = user_data[chat_id]["product"]
+                success, loss = save_to_sheet(user_name, product, quantity)
+                if success:
+                    send_message(chat_id, f"✅ Списано: {product} — {quantity} шт\n💰 Убыток: {loss:.0f} ₸")
+                else:
+                    send_message(chat_id, "❌ Ошибка сохранения")
+                del user_data[chat_id]
+                send_main_menu(chat_id)
+            except ValueError:
+                send_message(chat_id, "❌ Введите число:")
+
+        elif text == "➕ Другое":
+            user_data[chat_id] = {"waiting_for": "other_product"}
+            send_message(chat_id, "✏️ Напишите название позиции:")
+
+        elif text == "◀️ Назад":
+            if chat_id in user_data:
+                del user_data[chat_id]
+            send_main_menu(chat_id)
+
+        else:
+            send_message(chat_id, "❌ Используйте кнопки меню")
 
         return jsonify({"status": "ok"}), 200
     except Exception as e:
