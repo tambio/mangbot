@@ -10,10 +10,10 @@ from oauth2client.service_account import ServiceAccountCredentials
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SHEET_ID = os.environ.get("SHEET_ID")
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID")
+ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+
 app = Flask(__name__)
-
 logging.basicConfig(level=logging.INFO)
-
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 user_data = {}
@@ -32,20 +32,81 @@ def get_sheet(sheet_name):
     client = gspread.authorize(creds)
     return client.open_by_key(SHEET_ID).worksheet(sheet_name)
 
-def get_price(product_name):
+def get_menu():
+    """Читает лист 'Прайс'. Возвращает {категория: [(название, цена)]}"""
     try:
-        prices_sheet = get_sheet("Прайс")
-        all_prices = prices_sheet.get_all_values()
-        for row in all_prices[1:]:
-            if len(row) >= 2 and row[0] == product_name:
+        sheet = get_sheet("Прайс")
+        data = sheet.get_all_values()
+        menu = {}
+        for row in data[1:]:
+            if len(row) >= 3 and row[0].strip() and row[1].strip():
+                cat = row[0].strip()
+                name = row[1].strip()
                 try:
-                    return float(row[1])
+                    price = float(row[2])
                 except:
-                    return 0
-        return 0
+                    price = 0
+                menu.setdefault(cat, []).append((name, price))
+        return menu
     except Exception as e:
-        logging.error(f"Ошибка получения цены: {e}")
-        return 0
+        logging.error(f"Ошибка чтения меню: {e}")
+        return {}
+
+def get_price(product_name):
+    """Ищет цену по названию товара"""
+    menu = get_menu()
+    for cat, items in menu.items():
+        for name, price in items:
+            if name == product_name:
+                return price
+    return 0
+
+def add_product(category, name, price):
+    """Добавляет строку в лист 'Прайс'"""
+    try:
+        sheet = get_sheet("Прайс")
+        sheet.append_row([category, name, str(price)])
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка добавления: {e}")
+        return False
+
+def find_row_by_name(name):
+    """Возвращает номер строки (1-based) по названию или None"""
+    try:
+        sheet = get_sheet("Прайс")
+        data = sheet.get_all_values()
+        for i, row in enumerate(data):
+            if len(row) >= 2 and row[1].strip() == name:
+                return i + 1
+        return None
+    except Exception as e:
+        logging.error(f"Ошибка поиска: {e}")
+        return None
+
+def delete_product(name):
+    row = find_row_by_name(name)
+    if not row:
+        return False
+    try:
+        sheet = get_sheet("Прайс")
+        sheet.delete_rows(row)
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка удаления: {e}")
+        return False
+
+def update_price(name, new_price):
+    row = find_row_by_name(name)
+    if not row:
+        return False
+    try:
+        sheet = get_sheet("Прайс")
+        sheet.update_cell(row, 3, str(new_price))
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка обновления цены: {e}")
+        return False
 
 def save_to_sheet(user_name, product, quantity):
     try:
@@ -83,11 +144,7 @@ def send_message(chat_id, text, reply_markup=None):
 def send_photo_to_group(file_id, caption):
     try:
         url = f"{TELEGRAM_API_URL}/sendPhoto"
-        payload = {
-            "chat_id": GROUP_CHAT_ID,
-            "photo": file_id,
-            "caption": caption
-        }
+        payload = {"chat_id": GROUP_CHAT_ID, "photo": file_id, "caption": caption}
         r = requests.post(url, json=payload)
         logging.info(f"Фото в группу: {r.status_code} — {r.text[:200]}")
         return r.status_code == 200
@@ -95,64 +152,40 @@ def send_photo_to_group(file_id, caption):
         logging.error(f"Ошибка отправки фото в группу: {e}")
         return False
 
+# ========================
+# МЕНЮ
+# ========================
+
 def send_main_menu(chat_id):
-    keyboard = {
-        "keyboard": [
-            ["🥐 Круассан", "🥪 Панини"],
-            ["🥐 Слойка", "🥯 Бейгл"],
-            ["🍲 Киш", "🍙 Онигири"],
-            ["🌮 Кесадилья", "🌯 Тортилья"],
-            ["🍰 Торт нап-мед", "🥗 Боул"],
-            ["🍱 Ролл", "📊 Отчёты"],
-            ["📸 Обстановка на точке", "➕ Другое"]
-        ],
-        "resize_keyboard": True
-    }
-    send_message(chat_id, "🍽 ВЫБЕРИТЕ КАТЕГОРИЮ:", reply_markup=keyboard)
+    menu = get_menu()
+    categories = list(menu.keys())
+    keyboard = []
+    row = []
+    for i, cat in enumerate(categories):
+        row.append(cat)
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append(["📊 Отчёты", "📸 Обстановка на точке"])
+    keyboard.append(["➕ Другое"])
+    keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
+    send_message(chat_id, "🍽 ВЫБЕРИТЕ КАТЕГОРИЮ:", reply_markup=keyboard_obj)
 
-def send_croissant_menu(chat_id):
-    keyboard = {"keyboard": [
-        ["🥐 Круассан миндаль"],
-        ["🥐 Круассан шоколад"],
-        ["🥐 Круассан курица"],
-        ["🥐 Круассан индейка"],
-        ["◀️ Назад"]
-    ], "resize_keyboard": True}
-    send_message(chat_id, "🥐 ВЫБЕРИТЕ КРУАССАН:", reply_markup=keyboard)
-
-def send_panini_menu(chat_id):
-    keyboard = {"keyboard": [
-        ["🥪 Панини курица"],
-        ["🥪 Панини индейка"],
-        ["◀️ Назад"]
-    ], "resize_keyboard": True}
-    send_message(chat_id, "🥪 ВЫБЕРИТЕ ПАНИНИ:", reply_markup=keyboard)
-
-def send_sloika_menu(chat_id):
-    keyboard = {"keyboard": [["🥐 Слойка индейка"], ["◀️ Назад"]], "resize_keyboard": True}
-    send_message(chat_id, "🥐 ВЫБЕРИТЕ СЛОЙКУ:", reply_markup=keyboard)
-
-def send_bagel_menu(chat_id):
-    keyboard = {"keyboard": [
-        ["🥯 Бейгл индейка"],
-        ["🥯 Бейгл курица"],
-        ["◀️ Назад"]
-    ], "resize_keyboard": True}
-    send_message(chat_id, "🥯 ВЫБЕРИТЕ БЕЙГЛ:", reply_markup=keyboard)
-
-def send_bowl_menu(chat_id):
-    keyboard = {"keyboard": [
-        ["🥗 Боул сёмга"],
-        ["🥗 Боул курица"],
-        ["🥗 Боул цезарь"],
-        ["🥗 Боул фитнесс"],
-        ["◀️ Назад"]
-    ], "resize_keyboard": True}
-    send_message(chat_id, "🥗 ВЫБЕРИТЕ БОУЛ:", reply_markup=keyboard)
-
-def send_roll_menu(chat_id):
-    keyboard = {"keyboard": [["🍱 Ролл курица"], ["◀️ Назад"]], "resize_keyboard": True}
-    send_message(chat_id, "🍱 ВЫБЕРИТЕ РОЛЛ:", reply_markup=keyboard)
+def send_category_menu(chat_id, category):
+    menu = get_menu()
+    items = menu.get(category, [])
+    if not items:
+        send_message(chat_id, f"❌ В категории «{category}» нет товаров")
+        send_main_menu(chat_id)
+        return
+    keyboard = []
+    for name, price in items:
+        keyboard.append([name])
+    keyboard.append(["◀️ Назад"])
+    keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
+    send_message(chat_id, f"📦 {category} — выберите товар:", reply_markup=keyboard_obj)
 
 def send_reports_menu(chat_id):
     keyboard = {"keyboard": [
@@ -167,7 +200,7 @@ def send_month_selection(chat_id):
     row = []
     for i, month in enumerate(MONTHS):
         row.append(month)
-        if len(row) == 3 or i == len(MONTHS)-1:
+        if len(row) == 3 or i == len(MONTHS) - 1:
             months_kb.append(row.copy())
             row = []
     months_kb.append(["◀️ Назад"])
@@ -178,21 +211,21 @@ def send_week_selection(chat_id, month_name, year):
     month_num = MONTHS.index(month_name) + 1
     last_day = calendar.monthrange(year, month_num)[1]
     weeks = []
-    week_start = 1
-    while week_start <= last_day:
-        week_end = min(week_start + 6, last_day)
-        weeks.append((week_start, week_end))
-        week_start += 7
+    ws = 1
+    while ws <= last_day:
+        we = min(ws + 6, last_day)
+        weeks.append((ws, we))
+        ws += 7
     keyboard = []
     for ws, we in weeks:
         keyboard.append([f"{ws}-{we} {month_name}" if ws != we else f"{ws} {month_name}"])
-    if last_day > 28:
-        last_week_end = weeks[-1][1]
-        if last_week_end < last_day:
-            keyboard.append([f"{last_week_end+1}-{last_day} {month_name}"])
     keyboard.append(["Весь месяц", "◀️ Назад"])
     keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
-    send_message(chat_id, f"🗓 {month_name.upper()} {year} — ВЫБЕРИТЕ НЕДЕЛЮ:", reply_markup=keyboard_obj)
+    send_message(chat_id, f"🗓 {month_name.upper()} {year} — выберите неделю:", reply_markup=keyboard_obj)
+
+# ========================
+# ОТЧЁТЫ
+# ========================
 
 def send_weekly_report(chat_id):
     try:
@@ -210,11 +243,10 @@ def send_weekly_report(chat_id):
                     row_date = datetime.strptime(row[0], "%d.%m.%Y")
                     if row_date >= week_ago:
                         product = row[3]
-                        quantity = float(row[4])
+                        qty = float(row[4])
                         loss = float(row[6])
-                        if product not in stats:
-                            stats[product] = {"quantity": 0, "loss": 0}
-                        stats[product]["quantity"] += quantity
+                        stats.setdefault(product, {"qty": 0, "loss": 0})
+                        stats[product]["qty"] += qty
                         stats[product]["loss"] += loss
                         total_loss += loss
                 except:
@@ -224,7 +256,7 @@ def send_weekly_report(chat_id):
             return
         report = "📊 ОТЧЁТ ЗА НЕДЕЛЮ\n\n"
         for product, d in stats.items():
-            report += f"{product}: {d['quantity']} шт — {d['loss']:.0f} ₸\n"
+            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
         report += f"\n💰 ИТОГО УБЫТОК: {total_loss:.0f} ₸"
         send_message(chat_id, report)
     except Exception as e:
@@ -246,16 +278,13 @@ def send_monthly_report(chat_id, month_name, year, week_range=None):
                 try:
                     row_date = datetime.strptime(row[0], "%d.%m.%Y")
                     if row_date.year == year and row_date.month == month_num:
-                        if week_range:
-                            day = row_date.day
-                            if not (week_range[0] <= day <= week_range[1]):
-                                continue
+                        if week_range and not (week_range[0] <= row_date.day <= week_range[1]):
+                            continue
                         product = row[3]
-                        quantity = float(row[4])
+                        qty = float(row[4])
                         loss = float(row[6])
-                        if product not in stats:
-                            stats[product] = {"quantity": 0, "loss": 0}
-                        stats[product]["quantity"] += quantity
+                        stats.setdefault(product, {"qty": 0, "loss": 0})
+                        stats[product]["qty"] += qty
                         stats[product]["loss"] += loss
                         total_loss += loss
                 except:
@@ -268,7 +297,7 @@ def send_monthly_report(chat_id, month_name, year, week_range=None):
         else:
             report = f"📊 ОТЧЁТ ЗА {month_name} {year}\n\n"
         for product, d in stats.items():
-            report += f"{product}: {d['quantity']} шт — {d['loss']:.0f} ₸\n"
+            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
         report += f"\n💰 ИТОГО УБЫТОК: {total_loss:.0f} ₸"
         send_message(chat_id, report)
     except Exception as e:
@@ -283,33 +312,29 @@ def send_monthly_report(chat_id, month_name, year, week_range=None):
 def webhook():
     try:
         update = request.get_json()
-
         if "message" not in update:
             return jsonify({"status": "ok"}), 200
 
-        # Игнорируем сообщения из групп и каналов
+        # Игнорируем группы и каналы
         if update["message"]["chat"]["type"] != "private":
             return jsonify({"status": "ok"}), 200
 
         chat_id = update["message"]["chat"]["id"]
+        user_id = update["message"]["from"].get("id")
         user_name = update["message"]["from"].get("first_name", "Гость")
+        is_admin = user_id in ADMIN_IDS
 
-        # ===== ЕСЛИ ПРИШЛО ФОТО =====
+        # ===== ФОТО =====
         if "photo" in update["message"]:
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "point_photo":
                 try:
-                    photos = update["message"]["photo"]
-                    largest_photo = photos[-1]
-                    file_id = largest_photo["file_id"]
-
+                    file_id = update["message"]["photo"][-1]["file_id"]
                     now = datetime.now()
                     caption = f"📸 Обстановка на точке\n👤 {user_name}\n🕐 {now.strftime('%d.%m.%Y %H:%M')}"
-
                     if send_photo_to_group(file_id, caption):
                         send_message(chat_id, "✅ Фото отправлено в группу!")
                     else:
                         send_message(chat_id, "❌ Ошибка отправки в группу")
-
                     del user_data[chat_id]
                     send_main_menu(chat_id)
                 except Exception as e:
@@ -319,81 +344,107 @@ def webhook():
                 send_message(chat_id, "❌ Сначала нажмите 📸 Обстановка на точке")
             return jsonify({"status": "ok"}), 200
 
-        # ===== ТЕКСТОВЫЕ СООБЩЕНИЯ =====
-        text = update["message"].get("text", "")
+        # ===== ТЕКСТ =====
+        text = update["message"].get("text", "").strip()
+
+        # ===== АДМИН-КОМАНДЫ =====
+        if is_admin and text.startswith("/add"):
+            parts = text[4:].split("|")
+            if len(parts) == 3:
+                cat, name, price = [p.strip() for p in parts]
+                try:
+                    price_val = float(price)
+                    if add_product(cat, name, price_val):
+                        send_message(chat_id, f"✅ Добавлено:\n📁 {cat}\n📦 {name}\n💰 {price_val} ₸")
+                    else:
+                        send_message(chat_id, "❌ Ошибка добавления")
+                except ValueError:
+                    send_message(chat_id, "❌ Цена должна быть числом")
+            else:
+                send_message(chat_id, "📝 Формат: /add Категория | Название | Цена\nПример: /add Круассан | 🥐 Круассан фисташка | 120")
+            return jsonify({"status": "ok"}), 200
+
+        if is_admin and text.startswith("/del"):
+            name = text[4:].strip()
+            if not name:
+                send_message(chat_id, "📝 Формат: /del Название\nПример: /del 🥐 Круассан фисташка")
+                return jsonify({"status": "ok"}), 200
+            if delete_product(name):
+                send_message(chat_id, f"✅ Удалено: {name}")
+            else:
+                send_message(chat_id, f"❌ Товар «{name}» не найден")
+            return jsonify({"status": "ok"}), 200
+
+        if is_admin and text.startswith("/edit"):
+            parts = text[5:].split("|")
+            if len(parts) == 2:
+                name, price = [p.strip() for p in parts]
+                try:
+                    price_val = float(price)
+                    if update_price(name, price_val):
+                        send_message(chat_id, f"✅ Цена обновлена:\n📦 {name} → {price_val} ₸")
+                    else:
+                        send_message(chat_id, f"❌ Товар «{name}» не найден")
+                except ValueError:
+                    send_message(chat_id, "❌ Цена должна быть числом")
+            else:
+                send_message(chat_id, "📝 Формат: /edit Название | Новая цена\nПример: /edit 🥐 Круассан фисташка | 150")
+            return jsonify({"status": "ok"}), 200
+
+        if is_admin and text == "/list":
+            menu = get_menu()
+            if not menu:
+                send_message(chat_id, "📭 Товаров нет")
+            else:
+                msg = "📋 <b>ВСЕ ТОВАРЫ</b>\n\n"
+                for cat, items in menu.items():
+                    msg += f"<b>📁 {cat}</b>\n"
+                    for name, price in items:
+                        msg += f"  • {name} — {price} ₸\n"
+                    msg += "\n"
+                send_message(chat_id, msg)
+            return jsonify({"status": "ok"}), 200
 
         if text == "/start":
             send_main_menu(chat_id)
-        elif text == "🥐 Круассан":
-            send_croissant_menu(chat_id)
-        elif text == "🥪 Панини":
-            send_panini_menu(chat_id)
-        elif text == "🥐 Слойка":
-            send_sloika_menu(chat_id)
-        elif text == "🥯 Бейгл":
-            send_bagel_menu(chat_id)
-        elif text == "🍲 Киш":
-            user_data[chat_id] = {"waiting_for": "quantity", "product": "Киш курица"}
-            send_message(chat_id, "📝 Введите количество для Киш курица:")
-        elif text == "🍙 Онигири":
-            user_data[chat_id] = {"waiting_for": "quantity", "product": "Онигири"}
-            send_message(chat_id, "📝 Введите количество для Онигири:")
-        elif text == "🌮 Кесадилья":
-            user_data[chat_id] = {"waiting_for": "quantity", "product": "Кесадилья"}
-            send_message(chat_id, "📝 Введите количество для Кесадилья:")
-        elif text == "🌯 Тортилья":
-            user_data[chat_id] = {"waiting_for": "quantity", "product": "Тортилья"}
-            send_message(chat_id, "📝 Введите количество для Тортилья:")
-        elif text == "🍰 Торт нап-мед":
-            user_data[chat_id] = {"waiting_for": "quantity", "product": "Торт нап-мед"}
-            send_message(chat_id, "📝 Введите количество для Торт нап-мед:")
-        elif text == "🥗 Боул":
-            send_bowl_menu(chat_id)
-        elif text == "🍱 Ролл":
-            send_roll_menu(chat_id)
-        elif text == "📊 Отчёты":
+            return jsonify({"status": "ok"}), 200
+
+        # ===== СЕРВИСНЫЕ КНОПКИ =====
+        if text == "📊 Отчёты":
             send_reports_menu(chat_id)
-        elif text == "📆 За текущую неделю":
+            return jsonify({"status": "ok"}), 200
+        if text == "📆 За текущую неделю":
             send_weekly_report(chat_id)
-        elif text == "📅 За месяц":
+            return jsonify({"status": "ok"}), 200
+        if text == "📅 За месяц":
             send_month_selection(chat_id)
-        elif text == "📸 Обстановка на точке":
+            return jsonify({"status": "ok"}), 200
+        if text == "📸 Обстановка на точке":
             user_data[chat_id] = {"waiting_for": "point_photo"}
             send_message(chat_id, "📸 Отправьте фото обстановки на точке:")
+            return jsonify({"status": "ok"}), 200
+        if text == "➕ Другое":
+            user_data[chat_id] = {"waiting_for": "other_product"}
+            send_message(chat_id, "✏️ Напишите название позиции:")
+            return jsonify({"status": "ok"}), 200
+        if text == "◀️ Назад":
+            if chat_id in user_data:
+                del user_data[chat_id]
+            send_main_menu(chat_id)
+            return jsonify({"status": "ok"}), 200
 
-        # Продукты
-        elif text in ["🥐 Круассан миндаль", "🥐 Круассан шоколад", "🥐 Круассан курица", "🥐 Круассан индейка"]:
-            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-            send_message(chat_id, f"📝 Введите количество для {text}:")
-        elif text in ["🥪 Панини курица", "🥪 Панини индейка"]:
-            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-            send_message(chat_id, f"📝 Введите количество для {text}:")
-        elif text == "🥐 Слойка индейка":
-            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-            send_message(chat_id, f"📝 Введите количество для {text}:")
-        elif text in ["🥯 Бейгл индейка", "🥯 Бейгл курица"]:
-            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-            send_message(chat_id, f"📝 Введите количество для {text}:")
-        elif text in ["🥗 Боул сёмга", "🥗 Боул курица", "🥗 Боул цезарь", "🥗 Боул фитнесс"]:
-            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-            send_message(chat_id, f"📝 Введите количество для {text}:")
-        elif text == "🍱 Ролл курица":
-            user_data[chat_id] = {"waiting_for": "quantity", "product": text}
-            send_message(chat_id, f"📝 Введите количество для {text}:")
-
-        # Месяц
-        elif text in MONTHS:
+        # ===== ВЫБОР МЕСЯЦА =====
+        if text in MONTHS:
             current_year = datetime.now().year
             user_data[chat_id] = {"waiting_for": "week_in_month", "month": text, "year": current_year}
             send_week_selection(chat_id, text, current_year)
+            return jsonify({"status": "ok"}), 200
 
-        elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "week_in_month":
+        if chat_id in user_data and user_data[chat_id].get("waiting_for") == "week_in_month":
             month = user_data[chat_id]["month"]
             year = user_data[chat_id]["year"]
             if text == "Весь месяц":
                 send_monthly_report(chat_id, month, year)
-                del user_data[chat_id]
-                send_reports_menu(chat_id)
             elif " " in text and text.split(" ")[0].split("-")[0].isdigit():
                 week_part = text.split(" ")[0]
                 if "-" in week_part:
@@ -402,11 +453,12 @@ def webhook():
                 else:
                     d = int(week_part)
                     send_monthly_report(chat_id, month, year, (d, d))
-                del user_data[chat_id]
-                send_reports_menu(chat_id)
+            del user_data[chat_id]
+            send_reports_menu(chat_id)
+            return jsonify({"status": "ok"}), 200
 
-        # Количество
-        elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "quantity":
+        # ===== ВВОД КОЛИЧЕСТВА =====
+        if chat_id in user_data and user_data[chat_id].get("waiting_for") in ["quantity", "quantity_other"]:
             try:
                 quantity = float(text.replace(",", "."))
                 product = user_data[chat_id]["product"]
@@ -419,39 +471,32 @@ def webhook():
                 send_main_menu(chat_id)
             except ValueError:
                 send_message(chat_id, "❌ Введите число:")
+            return jsonify({"status": "ok"}), 200
 
-        elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "other_product":
+        # ===== РУЧНОЙ ВВОД ТОВАРА (Другое) =====
+        if chat_id in user_data and user_data[chat_id].get("waiting_for") == "other_product":
             product = text
             user_data[chat_id] = {"waiting_for": "quantity_other", "product": product}
             send_message(chat_id, f"📝 Введите количество для {product}:")
+            return jsonify({"status": "ok"}), 200
 
-        elif chat_id in user_data and user_data[chat_id].get("waiting_for") == "quantity_other":
-            try:
-                quantity = float(text.replace(",", "."))
-                product = user_data[chat_id]["product"]
-                success, loss = save_to_sheet(user_name, product, quantity)
-                if success:
-                    send_message(chat_id, f"✅ Списано: {product} — {quantity} шт\n💰 Убыток: {loss:.0f} ₸")
-                else:
-                    send_message(chat_id, "❌ Ошибка сохранения")
-                del user_data[chat_id]
-                send_main_menu(chat_id)
-            except ValueError:
-                send_message(chat_id, "❌ Введите число:")
+        # ===== ДИНАМИЧЕСКИЕ КАТЕГОРИИ =====
+        menu = get_menu()
+        if text in menu:
+            send_category_menu(chat_id, text)
+            return jsonify({"status": "ok"}), 200
 
-        elif text == "➕ Другое":
-            user_data[chat_id] = {"waiting_for": "other_product"}
-            send_message(chat_id, "✏️ Напишите название позиции:")
+        # ===== ДИНАМИЧЕСКИЕ ТОВАРЫ =====
+        for cat, items in menu.items():
+            for name, price in items:
+                if text == name:
+                    user_data[chat_id] = {"waiting_for": "quantity", "product": name}
+                    send_message(chat_id, f"📝 Введите количество для {name}:")
+                    return jsonify({"status": "ok"}), 200
 
-        elif text == "◀️ Назад":
-            if chat_id in user_data:
-                del user_data[chat_id]
-            send_main_menu(chat_id)
-
-        else:
-            send_message(chat_id, "❌ Используйте кнопки меню")
-
+        send_message(chat_id, "❌ Используйте кнопки меню")
         return jsonify({"status": "ok"}), 200
+
     except Exception as e:
         logging.error(f"Ошибка: {e}")
         return jsonify({"status": "error"}), 500
