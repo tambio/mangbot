@@ -287,6 +287,10 @@ def webhook():
         if "message" not in update:
             return jsonify({"status": "ok"}), 200
 
+        # Игнорируем сообщения из групп и каналов
+        if update["message"]["chat"]["type"] != "private":
+            return jsonify({"status": "ok"}), 200
+
         chat_id = update["message"]["chat"]["id"]
         user_name = update["message"]["from"].get("first_name", "Гость")
 
