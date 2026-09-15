@@ -3,6 +3,7 @@ import logging
 from flask import Flask, request, jsonify
 import requests
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import calendar
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -13,6 +14,9 @@ SHEET_ID_2 = os.environ.get("SHEET_ID_2")
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID")
 GROUP_CHAT_ID_2 = os.environ.get("GROUP_CHAT_ID_2")
 ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+
+# Часовой пояс Алматы
+TIMEZONE = ZoneInfo("Asia/Almaty")
 
 POINTS = {
     "point_1": {
@@ -128,7 +132,7 @@ def save_to_sheet(user_name, product, quantity, point_key):
         sheet = get_sheet("СПИСАНИЕ", point_key)
         price = get_price(product, point_key)
         loss = price * quantity
-        now = datetime.now()
+        now = datetime.now(TIMEZONE)  # ← время Алматы
         sheet.append_row([
             now.strftime("%d.%m.%Y"),
             now.strftime("%H:%M:%S"),
@@ -157,7 +161,6 @@ def send_message(chat_id, text, reply_markup=None):
         logging.error(f"Ошибка отправки: {e}")
 
 def send_photo_to_group(file_id, caption, point_key):
-    """Отправляет фото в группу ТОЙ точки, где работает бариста"""
     try:
         group_id = POINTS[point_key].get("group_id")
         if not group_id:
@@ -260,14 +263,14 @@ def send_weekly_report(chat_id, point_key):
         if len(data) <= 1:
             send_message(chat_id, "📭 За неделю списаний нет")
             return
-        week_ago = datetime.now() - timedelta(days=7)
+        week_ago = datetime.now(TIMEZONE) - timedelta(days=7)  # ← время Алматы
         stats = {}
         total_loss = 0
         for row in data[1:]:
             if len(row) >= 7:
                 try:
                     row_date = datetime.strptime(row[0], "%d.%m.%Y")
-                    if row_date >= week_ago:
+                    if row_date.date() >= week_ago.date():
                         product = row[3]
                         qty = float(row[4])
                         loss = float(row[6])
@@ -358,7 +361,7 @@ def webhook():
                     file_id = update["message"]["photo"][-1]["file_id"]
                     point_key = user_points.get(chat_id, "point_1")
                     point_name = POINTS[point_key]["name"]
-                    now = datetime.now()
+                    now = datetime.now(TIMEZONE)  # ← время Алматы
                     caption = f"📸 Обстановка на точке\n🏪 {point_name}\n👤 {user_name}\n🕐 {now.strftime('%d.%m.%Y %H:%M')}"
                     if send_photo_to_group(file_id, caption, point_key):
                         send_message(chat_id, "✅ Фото отправлено в группу!")
@@ -478,7 +481,7 @@ def webhook():
 
         # ===== ВЫБОР МЕСЯЦА =====
         if text in MONTHS:
-            current_year = datetime.now().year
+            current_year = datetime.now(TIMEZONE).year  # ← время Алматы
             user_data[chat_id] = {"waiting_for": "week_in_month", "month": text, "year": current_year}
             send_week_selection(chat_id, text, current_year)
             return jsonify({"status": "ok"}), 200
