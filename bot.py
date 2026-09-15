@@ -9,14 +9,30 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SHEET_ID = os.environ.get("SHEET_ID")
+SHEET_ID_2 = os.environ.get("SHEET_ID_2")
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID")
+GROUP_CHAT_ID_2 = os.environ.get("GROUP_CHAT_ID_2")
 ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+
+POINTS = {
+    "point_1": {
+        "name": os.environ.get("POINT_1_NAME", "Точка 1"),
+        "sheet_id": SHEET_ID,
+        "group_id": GROUP_CHAT_ID
+    },
+    "point_2": {
+        "name": os.environ.get("POINT_2_NAME", "Точка 2"),
+        "sheet_id": SHEET_ID_2,
+        "group_id": GROUP_CHAT_ID_2
+    }
+}
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 user_data = {}
+user_points = {}
 
 MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
           'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
@@ -25,17 +41,19 @@ MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май'
 # GOOGLE SHEETS
 # ========================
 
-def get_sheet(sheet_name):
+def get_sheet(sheet_name, point_key=None):
     creds_path = '/etc/secrets/credentials.json'
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
     client = gspread.authorize(creds)
-    return client.open_by_key(SHEET_ID).worksheet(sheet_name)
+    if point_key is None:
+        raise ValueError("point_key обязателен")
+    sheet_id = POINTS[point_key]["sheet_id"]
+    return client.open_by_key(sheet_id).worksheet(sheet_name)
 
-def get_menu():
-    """Читает лист 'Прайс'. Возвращает {категория: [(название, цена)]}"""
+def get_menu(point_key):
     try:
-        sheet = get_sheet("Прайс")
+        sheet = get_sheet("Прайс", point_key)
         data = sheet.get_all_values()
         menu = {}
         for row in data[1:]:
@@ -52,29 +70,26 @@ def get_menu():
         logging.error(f"Ошибка чтения меню: {e}")
         return {}
 
-def get_price(product_name):
-    """Ищет цену по названию товара"""
-    menu = get_menu()
+def get_price(product_name, point_key):
+    menu = get_menu(point_key)
     for cat, items in menu.items():
         for name, price in items:
             if name == product_name:
                 return price
     return 0
 
-def add_product(category, name, price):
-    """Добавляет строку в лист 'Прайс'"""
+def add_product(category, name, price, point_key):
     try:
-        sheet = get_sheet("Прайс")
+        sheet = get_sheet("Прайс", point_key)
         sheet.append_row([category, name, str(price)])
         return True
     except Exception as e:
         logging.error(f"Ошибка добавления: {e}")
         return False
 
-def find_row_by_name(name):
-    """Возвращает номер строки (1-based) по названию или None"""
+def find_row_by_name(name, point_key):
     try:
-        sheet = get_sheet("Прайс")
+        sheet = get_sheet("Прайс", point_key)
         data = sheet.get_all_values()
         for i, row in enumerate(data):
             if len(row) >= 2 and row[1].strip() == name:
@@ -84,34 +99,34 @@ def find_row_by_name(name):
         logging.error(f"Ошибка поиска: {e}")
         return None
 
-def delete_product(name):
-    row = find_row_by_name(name)
+def delete_product(name, point_key):
+    row = find_row_by_name(name, point_key)
     if not row:
         return False
     try:
-        sheet = get_sheet("Прайс")
+        sheet = get_sheet("Прайс", point_key)
         sheet.delete_rows(row)
         return True
     except Exception as e:
         logging.error(f"Ошибка удаления: {e}")
         return False
 
-def update_price(name, new_price):
-    row = find_row_by_name(name)
+def update_price(name, new_price, point_key):
+    row = find_row_by_name(name, point_key)
     if not row:
         return False
     try:
-        sheet = get_sheet("Прайс")
+        sheet = get_sheet("Прайс", point_key)
         sheet.update_cell(row, 3, str(new_price))
         return True
     except Exception as e:
         logging.error(f"Ошибка обновления цены: {e}")
         return False
 
-def save_to_sheet(user_name, product, quantity):
+def save_to_sheet(user_name, product, quantity, point_key):
     try:
-        sheet = get_sheet("СПИСАНИЕ")
-        price = get_price(product)
+        sheet = get_sheet("СПИСАНИЕ", point_key)
+        price = get_price(product, point_key)
         loss = price * quantity
         now = datetime.now()
         sheet.append_row([
@@ -141,27 +156,42 @@ def send_message(chat_id, text, reply_markup=None):
     except Exception as e:
         logging.error(f"Ошибка отправки: {e}")
 
-def send_photo_to_group(file_id, caption):
+def send_photo_to_group(file_id, caption, point_key):
+    """Отправляет фото в группу ТОЙ точки, где работает бариста"""
     try:
+        group_id = POINTS[point_key].get("group_id")
+        if not group_id:
+            logging.error(f"Не задан group_id для точки {point_key}")
+            return False
         url = f"{TELEGRAM_API_URL}/sendPhoto"
-        payload = {"chat_id": GROUP_CHAT_ID, "photo": file_id, "caption": caption}
+        payload = {"chat_id": group_id, "photo": file_id, "caption": caption}
         r = requests.post(url, json=payload)
-        logging.info(f"Фото в группу: {r.status_code} — {r.text[:200]}")
+        logging.info(f"Фото в группу {point_key}: {r.status_code} — {r.text[:200]}")
         return r.status_code == 200
     except Exception as e:
-        logging.error(f"Ошибка отправки фото в группу: {e}")
+        logging.error(f"Ошибка отправки фото: {e}")
         return False
 
 # ========================
 # МЕНЮ
 # ========================
 
-def send_main_menu(chat_id):
-    menu = get_menu()
+def send_point_selection(chat_id):
+    keyboard = {
+        "keyboard": [
+            [f"🏠 {POINTS['point_1']['name']}", f"🏠 {POINTS['point_2']['name']}"]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+    send_message(chat_id, "🏪 ВЫБЕРИТЕ ТОЧКУ:", reply_markup=keyboard)
+
+def send_main_menu(chat_id, point_key):
+    menu = get_menu(point_key)
     categories = list(menu.keys())
     keyboard = []
     row = []
-    for i, cat in enumerate(categories):
+    for cat in categories:
         row.append(cat)
         if len(row) == 2:
             keyboard.append(row)
@@ -169,25 +199,23 @@ def send_main_menu(chat_id):
     if row:
         keyboard.append(row)
     keyboard.append(["📊 Отчёты", "📸 Обстановка на точке"])
-    keyboard.append(["➕ Другое"])
+    keyboard.append(["➕ Другое", "🏪 Сменить точку"])
     keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
-    send_message(chat_id, "🍽 ВЫБЕРИТЕ КАТЕГОРИЮ:", reply_markup=keyboard_obj)
+    point_name = POINTS[point_key]["name"]
+    send_message(chat_id, f"📍 Точка: {point_name}\n🍽 Выберите категорию:", reply_markup=keyboard_obj)
 
-def send_category_menu(chat_id, category):
-    menu = get_menu()
+def send_category_menu(chat_id, category, point_key):
+    menu = get_menu(point_key)
     items = menu.get(category, [])
     if not items:
         send_message(chat_id, f"❌ В категории «{category}» нет товаров")
-        send_main_menu(chat_id)
+        send_main_menu(chat_id, point_key)
         return
-    keyboard = []
-    for name, price in items:
-        keyboard.append([name])
+    keyboard = [[name] for name, price in items]
     keyboard.append(["◀️ Назад"])
-    keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
-    send_message(chat_id, f"📦 {category} — выберите товар:", reply_markup=keyboard_obj)
+    send_message(chat_id, f"📦 {category}:", reply_markup={"keyboard": keyboard, "resize_keyboard": True})
 
-def send_reports_menu(chat_id):
+def send_reports_menu(chat_id, point_key):
     keyboard = {"keyboard": [
         ["📆 За текущую неделю"],
         ["📅 За месяц"],
@@ -204,8 +232,7 @@ def send_month_selection(chat_id):
             months_kb.append(row.copy())
             row = []
     months_kb.append(["◀️ Назад"])
-    keyboard = {"keyboard": months_kb, "resize_keyboard": True}
-    send_message(chat_id, "🗓 ВЫБЕРИТЕ МЕСЯЦ:", reply_markup=keyboard)
+    send_message(chat_id, "🗓 ВЫБЕРИТЕ МЕСЯЦ:", reply_markup={"keyboard": months_kb, "resize_keyboard": True})
 
 def send_week_selection(chat_id, month_name, year):
     month_num = MONTHS.index(month_name) + 1
@@ -220,16 +247,15 @@ def send_week_selection(chat_id, month_name, year):
     for ws, we in weeks:
         keyboard.append([f"{ws}-{we} {month_name}" if ws != we else f"{ws} {month_name}"])
     keyboard.append(["Весь месяц", "◀️ Назад"])
-    keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
-    send_message(chat_id, f"🗓 {month_name.upper()} {year} — выберите неделю:", reply_markup=keyboard_obj)
+    send_message(chat_id, f"🗓 {month_name.upper()} {year} — выберите неделю:", reply_markup={"keyboard": keyboard, "resize_keyboard": True})
 
 # ========================
 # ОТЧЁТЫ
 # ========================
 
-def send_weekly_report(chat_id):
+def send_weekly_report(chat_id, point_key):
     try:
-        sheet = get_sheet("СПИСАНИЕ")
+        sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
         if len(data) <= 1:
             send_message(chat_id, "📭 За неделю списаний нет")
@@ -252,20 +278,21 @@ def send_weekly_report(chat_id):
                 except:
                     continue
         if not stats:
-            send_message(chat_id, "📭 За последнюю неделю списаний нет")
+            send_message(chat_id, "📭 За неделю списаний нет")
             return
-        report = "📊 ОТЧЁТ ЗА НЕДЕЛЮ\n\n"
+        point_name = POINTS[point_key]["name"]
+        report = f"📊 ОТЧЁТ ЗА НЕДЕЛЮ ({point_name})\n\n"
         for product, d in stats.items():
             report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
-        report += f"\n💰 ИТОГО УБЫТОК: {total_loss:.0f} ₸"
+        report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
         send_message(chat_id, report)
     except Exception as e:
         logging.error(f"Ошибка отчёта: {e}")
         send_message(chat_id, "❌ Ошибка формирования отчёта")
 
-def send_monthly_report(chat_id, month_name, year, week_range=None):
+def send_monthly_report(chat_id, month_name, year, point_key, week_range=None):
     try:
-        sheet = get_sheet("СПИСАНИЕ")
+        sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
         if len(data) <= 1:
             send_message(chat_id, "📭 За указанный период списаний нет")
@@ -292,13 +319,14 @@ def send_monthly_report(chat_id, month_name, year, week_range=None):
         if not stats:
             send_message(chat_id, "📭 За указанный период списаний нет")
             return
+        point_name = POINTS[point_key]["name"]
         if week_range:
-            report = f"📊 ОТЧЁТ ЗА {week_range[0]}-{week_range[1]} {month_name} {year}\n\n"
+            report = f"📊 ОТЧЁТ ЗА {week_range[0]}-{week_range[1]} {month_name} ({point_name})\n\n"
         else:
-            report = f"📊 ОТЧЁТ ЗА {month_name} {year}\n\n"
+            report = f"📊 ОТЧЁТ ЗА {month_name} {year} ({point_name})\n\n"
         for product, d in stats.items():
             report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
-        report += f"\n💰 ИТОГО УБЫТОК: {total_loss:.0f} ₸"
+        report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
         send_message(chat_id, report)
     except Exception as e:
         logging.error(f"Ошибка отчёта: {e}")
@@ -315,7 +343,6 @@ def webhook():
         if "message" not in update:
             return jsonify({"status": "ok"}), 200
 
-        # Игнорируем группы и каналы
         if update["message"]["chat"]["type"] != "private":
             return jsonify({"status": "ok"}), 200
 
@@ -329,14 +356,16 @@ def webhook():
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "point_photo":
                 try:
                     file_id = update["message"]["photo"][-1]["file_id"]
+                    point_key = user_points.get(chat_id, "point_1")
+                    point_name = POINTS[point_key]["name"]
                     now = datetime.now()
-                    caption = f"📸 Обстановка на точке\n👤 {user_name}\n🕐 {now.strftime('%d.%m.%Y %H:%M')}"
-                    if send_photo_to_group(file_id, caption):
+                    caption = f"📸 Обстановка на точке\n🏪 {point_name}\n👤 {user_name}\n🕐 {now.strftime('%d.%m.%Y %H:%M')}"
+                    if send_photo_to_group(file_id, caption, point_key):
                         send_message(chat_id, "✅ Фото отправлено в группу!")
                     else:
                         send_message(chat_id, "❌ Ошибка отправки в группу")
                     del user_data[chat_id]
-                    send_main_menu(chat_id)
+                    send_main_menu(chat_id, point_key)
                 except Exception as e:
                     logging.error(f"Ошибка фото: {e}")
                     send_message(chat_id, "❌ Ошибка обработки фото")
@@ -344,8 +373,29 @@ def webhook():
                 send_message(chat_id, "❌ Сначала нажмите 📸 Обстановка на точке")
             return jsonify({"status": "ok"}), 200
 
-        # ===== ТЕКСТ =====
         text = update["message"].get("text", "").strip()
+
+        # ===== ВЫБОР ТОЧКИ =====
+        if text == "/start":
+            send_point_selection(chat_id)
+            return jsonify({"status": "ok"}), 200
+
+        for pk, pdata in POINTS.items():
+            if text == f"🏠 {pdata['name']}":
+                user_points[chat_id] = pk
+                send_message(chat_id, f"✅ Точка: {pdata['name']}")
+                send_main_menu(chat_id, pk)
+                return jsonify({"status": "ok"}), 200
+
+        if text == "🏪 Сменить точку":
+            send_point_selection(chat_id)
+            return jsonify({"status": "ok"}), 200
+
+        # ===== ПРОВЕРКА, ЧТО ТОЧКА ВЫБРАНА =====
+        if chat_id not in user_points:
+            send_message(chat_id, "⚠️ Сначала выберите точку: /start")
+            return jsonify({"status": "ok"}), 200
+        point_key = user_points[chat_id]
 
         # ===== АДМИН-КОМАНДЫ =====
         if is_admin and text.startswith("/add"):
@@ -353,23 +403,20 @@ def webhook():
             if len(parts) == 3:
                 cat, name, price = [p.strip() for p in parts]
                 try:
-                    price_val = float(price)
-                    if add_product(cat, name, price_val):
-                        send_message(chat_id, f"✅ Добавлено:\n📁 {cat}\n📦 {name}\n💰 {price_val} ₸")
+                    pv = float(price)
+                    if add_product(cat, name, pv, point_key):
+                        send_message(chat_id, f"✅ Добавлено в {POINTS[point_key]['name']}:\n📁 {cat}\n📦 {name}\n💰 {pv} ₸")
                     else:
                         send_message(chat_id, "❌ Ошибка добавления")
                 except ValueError:
                     send_message(chat_id, "❌ Цена должна быть числом")
             else:
-                send_message(chat_id, "📝 Формат: /add Категория | Название | Цена\nПример: /add Круассан | 🥐 Круассан фисташка | 120")
+                send_message(chat_id, "📝 Формат: /add Категория | Название | Цена")
             return jsonify({"status": "ok"}), 200
 
         if is_admin and text.startswith("/del"):
             name = text[4:].strip()
-            if not name:
-                send_message(chat_id, "📝 Формат: /del Название\nПример: /del 🥐 Круассан фисташка")
-                return jsonify({"status": "ok"}), 200
-            if delete_product(name):
+            if delete_product(name, point_key):
                 send_message(chat_id, f"✅ Удалено: {name}")
             else:
                 send_message(chat_id, f"❌ Товар «{name}» не найден")
@@ -380,48 +427,44 @@ def webhook():
             if len(parts) == 2:
                 name, price = [p.strip() for p in parts]
                 try:
-                    price_val = float(price)
-                    if update_price(name, price_val):
-                        send_message(chat_id, f"✅ Цена обновлена:\n📦 {name} → {price_val} ₸")
+                    pv = float(price)
+                    if update_price(name, pv, point_key):
+                        send_message(chat_id, f"✅ Цена обновлена: {name} → {pv} ₸")
                     else:
                         send_message(chat_id, f"❌ Товар «{name}» не найден")
                 except ValueError:
                     send_message(chat_id, "❌ Цена должна быть числом")
             else:
-                send_message(chat_id, "📝 Формат: /edit Название | Новая цена\nПример: /edit 🥐 Круассан фисташка | 150")
+                send_message(chat_id, "📝 Формат: /edit Название | Новая цена")
             return jsonify({"status": "ok"}), 200
 
         if is_admin and text == "/list":
-            menu = get_menu()
+            menu = get_menu(point_key)
             if not menu:
                 send_message(chat_id, "📭 Товаров нет")
             else:
-                msg = "📋 <b>ВСЕ ТОВАРЫ</b>\n\n"
+                msg = f"📋 ТОВАРЫ ({POINTS[point_key]['name']})\n\n"
                 for cat, items in menu.items():
-                    msg += f"<b>📁 {cat}</b>\n"
+                    msg += f"📁 {cat}\n"
                     for name, price in items:
                         msg += f"  • {name} — {price} ₸\n"
                     msg += "\n"
                 send_message(chat_id, msg)
             return jsonify({"status": "ok"}), 200
 
-        if text == "/start":
-            send_main_menu(chat_id)
-            return jsonify({"status": "ok"}), 200
-
-        # ===== СЕРВИСНЫЕ КНОПКИ =====
+        # ===== КНОПКИ =====
         if text == "📊 Отчёты":
-            send_reports_menu(chat_id)
+            send_reports_menu(chat_id, point_key)
             return jsonify({"status": "ok"}), 200
         if text == "📆 За текущую неделю":
-            send_weekly_report(chat_id)
+            send_weekly_report(chat_id, point_key)
             return jsonify({"status": "ok"}), 200
         if text == "📅 За месяц":
             send_month_selection(chat_id)
             return jsonify({"status": "ok"}), 200
         if text == "📸 Обстановка на точке":
             user_data[chat_id] = {"waiting_for": "point_photo"}
-            send_message(chat_id, "📸 Отправьте фото обстановки на точке:")
+            send_message(chat_id, "📸 Отправьте фото:")
             return jsonify({"status": "ok"}), 200
         if text == "➕ Другое":
             user_data[chat_id] = {"waiting_for": "other_product"}
@@ -430,7 +473,7 @@ def webhook():
         if text == "◀️ Назад":
             if chat_id in user_data:
                 del user_data[chat_id]
-            send_main_menu(chat_id)
+            send_main_menu(chat_id, point_key)
             return jsonify({"status": "ok"}), 200
 
         # ===== ВЫБОР МЕСЯЦА =====
@@ -444,17 +487,17 @@ def webhook():
             month = user_data[chat_id]["month"]
             year = user_data[chat_id]["year"]
             if text == "Весь месяц":
-                send_monthly_report(chat_id, month, year)
+                send_monthly_report(chat_id, month, year, point_key)
             elif " " in text and text.split(" ")[0].split("-")[0].isdigit():
                 week_part = text.split(" ")[0]
                 if "-" in week_part:
                     start, end = map(int, week_part.split("-"))
-                    send_monthly_report(chat_id, month, year, (start, end))
+                    send_monthly_report(chat_id, month, year, point_key, (start, end))
                 else:
                     d = int(week_part)
-                    send_monthly_report(chat_id, month, year, (d, d))
+                    send_monthly_report(chat_id, month, year, point_key, (d, d))
             del user_data[chat_id]
-            send_reports_menu(chat_id)
+            send_reports_menu(chat_id, point_key)
             return jsonify({"status": "ok"}), 200
 
         # ===== ВВОД КОЛИЧЕСТВА =====
@@ -462,18 +505,18 @@ def webhook():
             try:
                 quantity = float(text.replace(",", "."))
                 product = user_data[chat_id]["product"]
-                success, loss = save_to_sheet(user_name, product, quantity)
+                success, loss = save_to_sheet(user_name, product, quantity, point_key)
                 if success:
                     send_message(chat_id, f"✅ Списано: {product} — {quantity} шт\n💰 Убыток: {loss:.0f} ₸")
                 else:
                     send_message(chat_id, "❌ Ошибка сохранения")
                 del user_data[chat_id]
-                send_main_menu(chat_id)
+                send_main_menu(chat_id, point_key)
             except ValueError:
                 send_message(chat_id, "❌ Введите число:")
             return jsonify({"status": "ok"}), 200
 
-        # ===== РУЧНОЙ ВВОД ТОВАРА (Другое) =====
+        # ===== РУЧНОЙ ВВОД ТОВАРА =====
         if chat_id in user_data and user_data[chat_id].get("waiting_for") == "other_product":
             product = text
             user_data[chat_id] = {"waiting_for": "quantity_other", "product": product}
@@ -481,9 +524,9 @@ def webhook():
             return jsonify({"status": "ok"}), 200
 
         # ===== ДИНАМИЧЕСКИЕ КАТЕГОРИИ =====
-        menu = get_menu()
+        menu = get_menu(point_key)
         if text in menu:
-            send_category_menu(chat_id, text)
+            send_category_menu(chat_id, text, point_key)
             return jsonify({"status": "ok"}), 200
 
         # ===== ДИНАМИЧЕСКИЕ ТОВАРЫ =====
@@ -503,7 +546,7 @@ def webhook():
 
 @app.route('/', methods=['GET'])
 def index():
-    return "Бот учёта списаний работает!", 200
+    return "Бот учёта списаний (2 точки) работает!", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
