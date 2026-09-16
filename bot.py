@@ -288,7 +288,6 @@ def send_weekly_report(chat_id, point_key):
         report = f"📊 ОТЧЁТ ЗА НЕДЕЛЮ ({point_name})\n\n"
         for product, d in stats.items():
             report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
-        report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
         send_message(chat_id, report)
     except Exception as e:
         logging.error(f"Ошибка отчёта: {e}")
@@ -330,7 +329,6 @@ def send_monthly_report(chat_id, month_name, year, point_key, week_range=None):
             report = f"📊 ОТЧЁТ ЗА {month_name} {year} ({point_name})\n\n"
         for product, d in stats.items():
             report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
-        report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
         send_message(chat_id, report)
     except Exception as e:
         logging.error(f"Ошибка отчёта: {e}")
