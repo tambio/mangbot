@@ -132,7 +132,7 @@ def save_to_sheet(user_name, product, quantity, point_key):
         sheet = get_sheet("СПИСАНИЕ", point_key)
         price = get_price(product, point_key)
         loss = price * quantity
-        now = datetime.now(TIMEZONE)  # ← время Алматы
+        now = datetime.now(TIMEZONE)
         sheet.append_row([
             now.strftime("%d.%m.%Y"),
             now.strftime("%H:%M:%S"),
@@ -222,6 +222,7 @@ def send_reports_menu(chat_id, point_key):
     keyboard = {"keyboard": [
         ["📆 За текущую неделю"],
         ["📅 За месяц"],
+        ["📊 За период"],
         ["◀️ Назад"]
     ], "resize_keyboard": True}
     send_message(chat_id, "📊 ВЫБЕРИТЕ ТИП ОТЧЁТА:", reply_markup=keyboard)
@@ -263,7 +264,7 @@ def send_weekly_report(chat_id, point_key):
         if len(data) <= 1:
             send_message(chat_id, "📭 За неделю списаний нет")
             return
-        week_ago = datetime.now(TIMEZONE) - timedelta(days=7)  # ← время Алматы
+        week_ago = datetime.now(TIMEZONE) - timedelta(days=7)
         stats = {}
         total_loss = 0
         for row in data[1:]:
@@ -335,6 +336,57 @@ def send_monthly_report(chat_id, month_name, year, point_key, week_range=None):
         logging.error(f"Ошибка отчёта: {e}")
         send_message(chat_id, "❌ Ошибка формирования отчёта")
 
+def send_period_report(chat_id, point_key, date_from, date_to):
+    """Отчёт за произвольный период. date_from и date_to — объекты datetime.date"""
+    try:
+        sheet = get_sheet("СПИСАНИЕ", point_key)
+        data = sheet.get_all_values()
+        if len(data) <= 1:
+            send_message(chat_id, "📭 За этот период списаний нет")
+            return
+        stats = {}
+        total_loss = 0
+        for row in data[1:]:
+            if len(row) >= 7:
+                try:
+                    row_date = datetime.strptime(row[0], "%d.%m.%Y").date()
+                    if date_from <= row_date <= date_to:
+                        product = row[3]
+                        qty = float(row[4])
+                        loss = float(row[6])
+                        stats.setdefault(product, {"qty": 0, "loss": 0})
+                        stats[product]["qty"] += qty
+                        stats[product]["loss"] += loss
+                        total_loss += loss
+                except:
+                    continue
+        if not stats:
+            send_message(chat_id, "📭 За этот период списаний нет")
+            return
+        point_name = POINTS[point_key]["name"]
+        report = f"📊 ОТЧЁТ ЗА {date_from.strftime('%d.%m.%y')} – {date_to.strftime('%d.%m.%y')} ({point_name})\n\n"
+        for product, d in stats.items():
+            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+        report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
+        send_message(chat_id, report)
+    except Exception as e:
+        logging.error(f"Ошибка отчёта за период: {e}")
+        send_message(chat_id, "❌ Ошибка формирования отчёта")
+
+def parse_short_date(text):
+    """Парсит дату в формате ДД.ММ.ГГ. Возвращает datetime.date или None"""
+    try:
+        parts = text.strip().split(".")
+        if len(parts) != 3:
+            return None
+        day = int(parts[0])
+        month = int(parts[1])
+        year_short = int(parts[2])
+        year = 2000 + year_short
+        return datetime(year, month, day).date()
+    except (ValueError, IndexError):
+        return None
+
 # ========================
 # WEBHOOK
 # ========================
@@ -361,7 +413,7 @@ def webhook():
                     file_id = update["message"]["photo"][-1]["file_id"]
                     point_key = user_points.get(chat_id, "point_1")
                     point_name = POINTS[point_key]["name"]
-                    now = datetime.now(TIMEZONE)  # ← время Алматы
+                    now = datetime.now(TIMEZONE)
                     caption = f"📸 Обстановка на точке\n🏪 {point_name}\n👤 {user_name}\n🕐 {now.strftime('%d.%m.%Y %H:%M')}"
                     if send_photo_to_group(file_id, caption, point_key):
                         send_message(chat_id, "✅ Фото отправлено в группу!")
@@ -465,6 +517,14 @@ def webhook():
         if text == "📅 За месяц":
             send_month_selection(chat_id)
             return jsonify({"status": "ok"}), 200
+        if text == "📊 За период":
+            user_data[chat_id] = {"waiting_for": "period_start"}
+            send_message(chat_id,
+                "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\n"
+                "Например: 01.09.26",
+                reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True}
+            )
+            return jsonify({"status": "ok"}), 200
         if text == "📸 Обстановка на точке":
             user_data[chat_id] = {"waiting_for": "point_photo"}
             send_message(chat_id, "📸 Отправьте фото:")
@@ -478,10 +538,56 @@ def webhook():
                 del user_data[chat_id]
             send_main_menu(chat_id, point_key)
             return jsonify({"status": "ok"}), 200
+        if text == "◀️ Отмена":
+            if chat_id in user_data:
+                del user_data[chat_id]
+            send_reports_menu(chat_id, point_key)
+            return jsonify({"status": "ok"}), 200
+
+        # ===== ВВОД ДАТЫ НАЧАЛА ПЕРИОДА =====
+        if chat_id in user_data and user_data[chat_id].get("waiting_for") == "period_start":
+            d = parse_short_date(text)
+            if not d:
+                send_message(chat_id,
+                    "❌ Неверный формат. Введите дату как ДД.ММ.ГГ\n\n"
+                    "Например: 01.09.26",
+                    reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True}
+                )
+                return jsonify({"status": "ok"}), 200
+            user_data[chat_id] = {"waiting_for": "period_end", "date_from": d}
+            send_message(chat_id,
+                "📅 Введите дату КОНЦА в формате ДД.ММ.ГГ\n\n"
+                "Например: 15.09.26",
+                reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True}
+            )
+            return jsonify({"status": "ok"}), 200
+
+        # ===== ВВОД ДАТЫ КОНЦА ПЕРИОДА =====
+        if chat_id in user_data and user_data[chat_id].get("waiting_for") == "period_end":
+            d_end = parse_short_date(text)
+            if not d_end:
+                send_message(chat_id,
+                    "❌ Неверный формат. Введите дату как ДД.ММ.ГГ\n\n"
+                    "Например: 15.09.26",
+                    reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True}
+                )
+                return jsonify({"status": "ok"}), 200
+            d_start = user_data[chat_id]["date_from"]
+            if d_end < d_start:
+                send_message(chat_id,
+                    "❌ Дата конца не может быть раньше даты начала.\n"
+                    "Введите дату КОНЦА ещё раз:",
+                    reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True}
+                )
+                return jsonify({"status": "ok"}), 200
+            send_period_report(chat_id, point_key, d_start, d_end)
+            del user_data[chat_id]
+            send_reports_menu(chat_id, point_key)
+            return jsonify({"status": "ok"}), 200
 
         # ===== ВЫБОР МЕСЯЦА =====
         if text in MONTHS:
-            current_year = datetime.now(TIMEZONE).year  # ← время Алматы
+            current_year = datetime.now(TIMEZONE).year
             user_data[chat_id] = {"waiting_for": "week_in_month", "month": text, "year": current_year}
             send_week_selection(chat_id, text, current_year)
             return jsonify({"status": "ok"}), 200
