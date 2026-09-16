@@ -614,7 +614,7 @@ def webhook():
                 product = user_data[chat_id]["product"]
                 success, loss = save_to_sheet(user_name, product, quantity, point_key)
                 if success:
-                    send_message(chat_id, f"✅ Списано: {product} — {quantity} шт\n💰 Убыток: {loss:.0f} ₸")
+                    send_message(chat_id, f"✅ Списано: {product} — {quantity} шт")
                 else:
                     send_message(chat_id, "❌ Ошибка сохранения")
                 del user_data[chat_id]
