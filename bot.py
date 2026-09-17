@@ -175,14 +175,12 @@ def send_photo_to_group(file_id, caption, point_key):
         url = f"{TELEGRAM_API_URL}/sendPhoto"
         payload = {"chat_id": group_id, "photo": file_id, "caption": caption}
         r = requests.post(url, json=payload)
-        logging.info(f"Фото в группу {point_key}: {r.status_code} — {r.text[:200]}")
         return r.status_code == 200
     except Exception as e:
         logging.error(f"Ошибка отправки фото: {e}")
         return False
 
 def answer_callback(callback_id, text=None):
-    """Ответ на callback_query (убирает 'часики' на кнопке)"""
     try:
         url = f"{TELEGRAM_API_URL}/answerCallbackQuery"
         payload = {"callback_query_id": callback_id}
@@ -271,117 +269,29 @@ def send_week_selection(chat_id, month_name, year):
     send_message(chat_id, f"🗓 {month_name.upper()} {year} — выберите неделю:", reply_markup={"keyboard": keyboard, "resize_keyboard": True})
 
 # ========================
-# ОТЧЁТЫ
+# ОТЧЁТЫ (личка)
 # ========================
 
 def send_weekly_report(chat_id, point_key):
-    try:
-        sheet = get_sheet("СПИСАНИЕ", point_key)
-        data = sheet.get_all_values()
-        if len(data) <= 1:
-            send_message(chat_id, "📭 За неделю списаний нет")
-            return
-        week_ago = datetime.now(TIMEZONE) - timedelta(days=7)
-        stats = {}
-        for row in data[1:]:
-            if len(row) >= 7:
-                try:
-                    row_date = datetime.strptime(row[0], "%d.%m.%Y")
-                    if row_date.date() >= week_ago.date():
-                        product = row[3]
-                        qty = float(row[4])
-                        loss = float(row[6])
-                        stats.setdefault(product, {"qty": 0, "loss": 0})
-                        stats[product]["qty"] += qty
-                        stats[product]["loss"] += loss
-                except:
-                    continue
-        if not stats:
-            send_message(chat_id, "📭 За неделю списаний нет")
-            return
-        point_name = POINTS[point_key]["name"]
-        report = f"📊 ОТЧЁТ ЗА НЕДЕЛЮ ({point_name})\n\n"
-        for product, d in stats.items():
-            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+    report = build_week_report_text(point_key)
+    if report:
         send_message(chat_id, report)
-    except Exception as e:
-        logging.error(f"Ошибка отчёта: {e}")
-        send_message(chat_id, "❌ Ошибка формирования отчёта")
+    else:
+        send_message(chat_id, "📭 За неделю списаний нет")
 
 def send_monthly_report(chat_id, month_name, year, point_key, week_range=None):
-    try:
-        sheet = get_sheet("СПИСАНИЕ", point_key)
-        data = sheet.get_all_values()
-        if len(data) <= 1:
-            send_message(chat_id, "📭 За указанный период списаний нет")
-            return
-        month_num = MONTHS.index(month_name) + 1
-        stats = {}
-        for row in data[1:]:
-            if len(row) >= 7:
-                try:
-                    row_date = datetime.strptime(row[0], "%d.%m.%Y")
-                    if row_date.year == year and row_date.month == month_num:
-                        if week_range and not (week_range[0] <= row_date.day <= week_range[1]):
-                            continue
-                        product = row[3]
-                        qty = float(row[4])
-                        loss = float(row[6])
-                        stats.setdefault(product, {"qty": 0, "loss": 0})
-                        stats[product]["qty"] += qty
-                        stats[product]["loss"] += loss
-                except:
-                    continue
-        if not stats:
-            send_message(chat_id, "📭 За указанный период списаний нет")
-            return
-        point_name = POINTS[point_key]["name"]
-        if week_range:
-            report = f"📊 ОТЧЁТ ЗА {week_range[0]}-{week_range[1]} {month_name} ({point_name})\n\n"
-        else:
-            report = f"📊 ОТЧЁТ ЗА {month_name} {year} ({point_name})\n\n"
-        for product, d in stats.items():
-            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+    report = build_month_by_name_text(point_key, month_name, year, week_range)
+    if report:
         send_message(chat_id, report)
-    except Exception as e:
-        logging.error(f"Ошибка отчёта: {e}")
-        send_message(chat_id, "❌ Ошибка формирования отчёта")
+    else:
+        send_message(chat_id, "📭 За указанный период списаний нет")
 
 def send_period_report(chat_id, point_key, date_from, date_to):
-    try:
-        sheet = get_sheet("СПИСАНИЕ", point_key)
-        data = sheet.get_all_values()
-        if len(data) <= 1:
-            send_message(chat_id, "📭 За этот период списаний нет")
-            return
-        stats = {}
-        total_loss = 0
-        for row in data[1:]:
-            if len(row) >= 7:
-                try:
-                    row_date = datetime.strptime(row[0], "%d.%m.%Y").date()
-                    if date_from <= row_date <= date_to:
-                        product = row[3]
-                        qty = float(row[4])
-                        loss = float(row[6])
-                        stats.setdefault(product, {"qty": 0, "loss": 0})
-                        stats[product]["qty"] += qty
-                        stats[product]["loss"] += loss
-                        total_loss += loss
-                except:
-                    continue
-        if not stats:
-            send_message(chat_id, "📭 За этот период списаний нет")
-            return
-        point_name = POINTS[point_key]["name"]
-        report = f"📊 ОТЧЁТ ЗА {date_from.strftime('%d.%m.%y')} – {date_to.strftime('%d.%m.%y')} ({point_name})\n\n"
-        for product, d in stats.items():
-            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
-        report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
+    report = build_period_report_text(point_key, date_from, date_to)
+    if report:
         send_message(chat_id, report)
-    except Exception as e:
-        logging.error(f"Ошибка отчёта за период: {e}")
-        send_message(chat_id, "❌ Ошибка формирования отчёта")
+    else:
+        send_message(chat_id, "📭 За этот период списаний нет")
 
 def parse_short_date(text):
     try:
@@ -397,11 +307,10 @@ def parse_short_date(text):
         return None
 
 # ========================
-# ОТЧЁТЫ ДЛЯ ГРУПП
+# ОБЩИЕ ФУНКЦИИ ФОРМИРОВАНИЯ ОТЧЁТОВ
 # ========================
 
 def build_week_report_text(point_key):
-    """Собирает текст недельного отчёта (без итога). Возвращает строку или None."""
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
@@ -434,7 +343,7 @@ def build_week_report_text(point_key):
         return None
 
 def build_month_report_text(point_key):
-    """Собирает текст отчёта за текущий календарный месяц."""
+    """Отчёт за текущий календарный месяц"""
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
@@ -467,19 +376,22 @@ def build_month_report_text(point_key):
         logging.error(f"Ошибка месячного отчёта: {e}")
         return None
 
-def build_period_report_text(point_key, date_from, date_to):
-    """Собирает текст отчёта за произвольный период."""
+def build_month_by_name_text(point_key, month_name, year, week_range=None):
+    """Отчёт за указанный месяц (для лички)"""
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
         if len(data) <= 1:
             return None
+        month_num = MONTHS.index(month_name) + 1
         stats = {}
         for row in data[1:]:
             if len(row) >= 7:
                 try:
-                    row_date = datetime.strptime(row[0], "%d.%m.%Y").date()
-                    if date_from <= row_date <= date_to:
+                    row_date = datetime.strptime(row[0], "%d.%m.%Y")
+                    if row_date.year == year and row_date.month == month_num:
+                        if week_range and not (week_range[0] <= row_date.day <= week_range[1]):
+                            continue
                         product = row[3]
                         qty = float(row[4])
                         loss = float(row[6])
@@ -491,17 +403,54 @@ def build_period_report_text(point_key, date_from, date_to):
         if not stats:
             return None
         point_name = POINTS[point_key]["name"]
+        if week_range:
+            report = f"📊 ОТЧЁТ ЗА {week_range[0]}-{week_range[1]} {month_name} ({point_name})\n\n"
+        else:
+            report = f"📊 ОТЧЁТ ЗА {month_name} {year} ({point_name})\n\n"
+        for product, d in stats.items():
+            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+        return report
+    except Exception as e:
+        logging.error(f"Ошибка месячного отчёта: {e}")
+        return None
+
+def build_period_report_text(point_key, date_from, date_to):
+    try:
+        sheet = get_sheet("СПИСАНИЕ", point_key)
+        data = sheet.get_all_values()
+        if len(data) <= 1:
+            return None
+        stats = {}
+        total_loss = 0
+        for row in data[1:]:
+            if len(row) >= 7:
+                try:
+                    row_date = datetime.strptime(row[0], "%d.%m.%Y").date()
+                    if date_from <= row_date <= date_to:
+                        product = row[3]
+                        qty = float(row[4])
+                        loss = float(row[6])
+                        stats.setdefault(product, {"qty": 0, "loss": 0})
+                        stats[product]["qty"] += qty
+                        stats[product]["loss"] += loss
+                        total_loss += loss
+                except:
+                    continue
+        if not stats:
+            return None
+        point_name = POINTS[point_key]["name"]
         report = f"📊 ОТЧЁТ ЗА {date_from.strftime('%d.%m.%y')} – {date_to.strftime('%d.%m.%y')} ({point_name})\n\n"
         for product, d in stats.items():
             report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+        report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
         return report
     except Exception as e:
         logging.error(f"Ошибка отчёта за период: {e}")
         return None
 
-def send_group_help(chat_id, user_name):
+def send_group_help(chat_id):
     help_text = (
-        f"👤 {user_name}, доступные команды:\n\n"
+        "Доступные команды:\n\n"
         "📊 /report — отчёт за 7 дней\n"
         "📅 /month — отчёт за текущий месяц\n"
         "📈 /period — отчёт за произвольный период\n"
@@ -517,7 +466,6 @@ def send_group_help(chat_id, user_name):
 def webhook():
     try:
         update = request.get_json()
-        logging.info(f"UPDATE: {update}")
 
         # ====================================
         # CALLBACK QUERY (нажатия inline-кнопок)
@@ -529,9 +477,7 @@ def webhook():
             chat = cq["message"]["chat"]
             chat_id = chat["id"]
             chat_type = chat["type"]
-            user_name = cq["from"].get("first_name", "Гость")
 
-            # Только в группах обрабатываем
             if chat_type == "private":
                 answer_callback(callback_id)
                 return jsonify({"status": "ok"}), 200
@@ -546,33 +492,21 @@ def webhook():
             if data == "p7":
                 answer_callback(callback_id)
                 report = build_week_report_text(point_key)
-                if report:
-                    send_message(chat_id, f"👤 {user_name}\n{report}")
-                else:
-                    send_message(chat_id, "📭 За 7 дней списаний нет")
+                send_message(chat_id, report if report else "📭 За 7 дней списаний нет")
             elif data == "p30":
                 answer_callback(callback_id)
                 date_to = datetime.now(TIMEZONE).date()
                 date_from = date_to - timedelta(days=30)
                 report = build_period_report_text(point_key, date_from, date_to)
-                if report:
-                    send_message(chat_id, f"👤 {user_name}\n{report}")
-                else:
-                    send_message(chat_id, "📭 За 30 дней списаний нет")
+                send_message(chat_id, report if report else "📭 За 30 дней списаний нет")
             elif data == "pmonth":
                 answer_callback(callback_id)
                 report = build_month_report_text(point_key)
-                if report:
-                    send_message(chat_id, f"👤 {user_name}\n{report}")
-                else:
-                    send_message(chat_id, "📭 За этот месяц списаний нет")
+                send_message(chat_id, report if report else "📭 За этот месяц списаний нет")
             elif data == "pcustom":
                 answer_callback(callback_id)
-                user_data[(chat_id, cq["from"]["id"])] = {"waiting_for": "group_period_start"}
-                send_message(
-                    chat_id,
-                    f"👤 {user_name}, введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\nНапример: 01.09.26"
-                )
+                user_data[chat_id] = {"waiting_for": "group_period_start"}
+                send_message(chat_id, "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\nНапример: 01.09.26")
             elif data == "pcancel":
                 answer_callback(callback_id, "Отменено")
             else:
@@ -592,12 +526,12 @@ def webhook():
         user_name = update["message"]["from"].get("first_name", "Гость")
 
         # ====================================
-        # ЛИЧКА (всё как было)
+        # ЛИЧКА
         # ====================================
         if chat_type == "private":
             is_admin = user_id in ADMIN_IDS
 
-            # ===== ФОТО =====
+            # ФОТО
             if "photo" in update["message"]:
                 if chat_id in user_data and user_data[chat_id].get("waiting_for") == "point_photo":
                     try:
@@ -621,7 +555,6 @@ def webhook():
 
             text = update["message"].get("text", "").strip()
 
-            # ===== ВЫБОР ТОЧКИ =====
             if text == "/start":
                 send_point_selection(chat_id)
                 return jsonify({"status": "ok"}), 200
@@ -642,7 +575,7 @@ def webhook():
                 return jsonify({"status": "ok"}), 200
             point_key = user_points[chat_id]
 
-            # ===== АДМИН-КОМАНДЫ =====
+            # АДМИН-КОМАНДЫ
             if is_admin and text.startswith("/add"):
                 parts = text[4:].split("|")
                 if len(parts) == 3:
@@ -697,7 +630,7 @@ def webhook():
                     send_message(chat_id, msg)
                 return jsonify({"status": "ok"}), 200
 
-            # ===== КНОПКИ =====
+            # КНОПКИ
             if text == "📊 Отчёты":
                 send_reports_menu(chat_id, point_key)
                 return jsonify({"status": "ok"}), 200
@@ -710,10 +643,8 @@ def webhook():
             if text == "📊 За период":
                 user_data[chat_id] = {"waiting_for": "period_start"}
                 send_message(chat_id,
-                    "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\n"
-                    "Например: 01.09.26",
-                    reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True}
-                )
+                    "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\nНапример: 01.09.26",
+                    reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
             if text == "📸 Обстановка на точке":
                 user_data[chat_id] = {"waiting_for": "point_photo"}
@@ -734,43 +665,34 @@ def webhook():
                 send_reports_menu(chat_id, point_key)
                 return jsonify({"status": "ok"}), 200
 
-            # ===== ВВОД ДАТЫ НАЧАЛА ПЕРИОДА =====
+            # ВВОД ДАТЫ НАЧАЛА ПЕРИОДА
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "period_start":
                 d = parse_short_date(text)
                 if not d:
-                    send_message(chat_id,
-                        "❌ Неверный формат. Введите дату как ДД.ММ.ГГ\n\nНапример: 01.09.26",
-                        reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True}
-                    )
+                    send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 01.09.26",
+                                 reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
                     return jsonify({"status": "ok"}), 200
                 user_data[chat_id] = {"waiting_for": "period_end", "date_from": d}
-                send_message(chat_id,
-                    "📅 Введите дату КОНЦА в формате ДД.ММ.ГГ\n\nНапример: 15.09.26",
-                    reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True}
-                )
+                send_message(chat_id, "📅 Введите дату КОНЦА в формате ДД.ММ.ГГ\n\nНапример: 15.09.26",
+                             reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
 
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "period_end":
                 d_end = parse_short_date(text)
                 if not d_end:
-                    send_message(chat_id,
-                        "❌ Неверный формат. Введите дату как ДД.ММ.ГГ\n\nНапример: 15.09.26",
-                        reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True}
-                    )
+                    send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 15.09.26",
+                                 reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
                     return jsonify({"status": "ok"}), 200
                 d_start = user_data[chat_id]["date_from"]
                 if d_end < d_start:
-                    send_message(chat_id,
-                        "❌ Дата конца не может быть раньше даты начала.\nВведите дату КОНЦА ещё раз:",
-                        reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True}
-                    )
+                    send_message(chat_id, "❌ Дата конца раньше начала. Введите КОНЕЦ ещё раз:")
                     return jsonify({"status": "ok"}), 200
                 send_period_report(chat_id, point_key, d_start, d_end)
                 del user_data[chat_id]
                 send_reports_menu(chat_id, point_key)
                 return jsonify({"status": "ok"}), 200
 
-            # ===== ВЫБОР МЕСЯЦА =====
+            # ВЫБОР МЕСЯЦА
             if text in MONTHS:
                 current_year = datetime.now(TIMEZONE).year
                 user_data[chat_id] = {"waiting_for": "week_in_month", "month": text, "year": current_year}
@@ -794,7 +716,7 @@ def webhook():
                 send_reports_menu(chat_id, point_key)
                 return jsonify({"status": "ok"}), 200
 
-            # ===== ВВОД КОЛИЧЕСТВА =====
+            # ВВОД КОЛИЧЕСТВА
             if chat_id in user_data and user_data[chat_id].get("waiting_for") in ["quantity", "quantity_other"]:
                 try:
                     quantity = float(text.replace(",", "."))
@@ -839,71 +761,51 @@ def webhook():
             return jsonify({"status": "ok"}), 200
 
         point_key = GROUP_TO_POINT[group_key]
+        text = update["message"].get("text", "").strip()
 
-        # Проверяем, ожидает ли этот пользователь ввод дат для «своего периода»
-        state_key = (chat_id, user_id)
-        if state_key in user_data:
-            state = user_data[state_key]
-            text = update["message"].get("text", "").strip()
+        # Ожидание ввода дат
+        if chat_id in user_data:
+            state = user_data[chat_id]
 
             if state.get("waiting_for") == "group_period_start":
                 d = parse_short_date(text)
                 if not d:
-                    send_message(chat_id,
-                        f"👤 {user_name}, ❌ неверный формат. Введите дату как ДД.ММ.ГГ\nНапример: 01.09.26"
-                    )
+                    send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 01.09.26")
                     return jsonify({"status": "ok"}), 200
-                user_data[state_key] = {"waiting_for": "group_period_end", "date_from": d}
-                send_message(chat_id, f"👤 {user_name}, введите дату КОНЦА в формате ДД.ММ.ГГ\nНапример: 15.09.26")
+                user_data[chat_id] = {"waiting_for": "group_period_end", "date_from": d}
+                send_message(chat_id, "📅 Введите дату КОНЦА в формате ДД.ММ.ГГ\nНапример: 15.09.26")
                 return jsonify({"status": "ok"}), 200
 
             if state.get("waiting_for") == "group_period_end":
                 d_end = parse_short_date(text)
                 if not d_end:
-                    send_message(chat_id,
-                        f"👤 {user_name}, ❌ неверный формат. Введите дату как ДД.ММ.ГГ\nНапример: 15.09.26"
-                    )
+                    send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 15.09.26")
                     return jsonify({"status": "ok"}), 200
                 d_start = state["date_from"]
                 if d_end < d_start:
-                    send_message(chat_id,
-                        f"👤 {user_name}, ❌ дата конца раньше даты начала. Введите КОНЕЦ ещё раз:"
-                    )
+                    send_message(chat_id, "❌ Дата конца раньше начала. Введите КОНЕЦ ещё раз:")
                     return jsonify({"status": "ok"}), 200
                 report = build_period_report_text(point_key, d_start, d_end)
-                if report:
-                    send_message(chat_id, f"👤 {user_name}\n{report}")
-                else:
-                    send_message(chat_id, "📭 За этот период списаний нет")
-                del user_data[state_key]
+                send_message(chat_id, report if report else "📭 За этот период списаний нет")
+                del user_data[chat_id]
                 return jsonify({"status": "ok"}), 200
 
-            # Если ждём даты, но пришло что-то не то — ждём дальше
             return jsonify({"status": "ok"}), 200
-
-        text = update["message"].get("text", "").strip()
 
         # Не команда — молчим
         if not text.startswith("/"):
             return jsonify({"status": "ok"}), 200
 
-        # Команда
         cmd = text.split()[0].split("@")[0]
 
         if cmd == "/help":
-            send_group_help(chat_id, user_name)
+            send_group_help(chat_id)
         elif cmd == "/report":
             report = build_week_report_text(point_key)
-            if report:
-                send_message(chat_id, f"👤 {user_name}\n{report}")
-            else:
-                send_message(chat_id, "📭 За 7 дней списаний нет")
+            send_message(chat_id, report if report else "📭 За 7 дней списаний нет")
         elif cmd == "/month":
             report = build_month_report_text(point_key)
-            if report:
-                send_message(chat_id, f"👤 {user_name}\n{report}")
-            else:
-                send_message(chat_id, "📭 За этот месяц списаний нет")
+            send_message(chat_id, report if report else "📭 За этот месяц списаний нет")
         elif cmd == "/period":
             keyboard = {
                 "inline_keyboard": [
@@ -920,9 +822,9 @@ def webhook():
                     ]
                 ]
             }
-            send_message(chat_id, f"👤 {user_name}, выберите период:", reply_markup=keyboard)
+            send_message(chat_id, "Выберите период:", reply_markup=keyboard)
         else:
-            send_message(chat_id, f"❌ Неизвестная команда. Список: /help")
+            send_message(chat_id, "❌ Неизвестная команда. Список: /help")
 
         return jsonify({"status": "ok"}), 200
 
