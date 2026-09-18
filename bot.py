@@ -13,9 +13,7 @@ SHEET_ID = os.environ.get("SHEET_ID")
 SHEET_ID_2 = os.environ.get("SHEET_ID_2")
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID")
 GROUP_CHAT_ID_2 = os.environ.get("GROUP_CHAT_ID_2")
-ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 
-# Часовой пояс Алматы
 TIMEZONE = ZoneInfo("Asia/Almaty")
 
 POINTS = {
@@ -31,7 +29,6 @@ POINTS = {
     }
 }
 
-# Привязка групп к точкам (для команд в группе)
 GROUP_TO_POINT = {
     str(GROUP_CHAT_ID): "point_1",
     str(GROUP_CHAT_ID_2): "point_2"
@@ -87,51 +84,6 @@ def get_price(product_name, point_key):
             if name == product_name:
                 return price
     return 0
-
-def add_product(category, name, price, point_key):
-    try:
-        sheet = get_sheet("Прайс", point_key)
-        sheet.append_row([category, name, str(price)])
-        return True
-    except Exception as e:
-        logging.error(f"Ошибка добавления: {e}")
-        return False
-
-def find_row_by_name(name, point_key):
-    try:
-        sheet = get_sheet("Прайс", point_key)
-        data = sheet.get_all_values()
-        for i, row in enumerate(data):
-            if len(row) >= 2 and row[1].strip() == name:
-                return i + 1
-        return None
-    except Exception as e:
-        logging.error(f"Ошибка поиска: {e}")
-        return None
-
-def delete_product(name, point_key):
-    row = find_row_by_name(name, point_key)
-    if not row:
-        return False
-    try:
-        sheet = get_sheet("Прайс", point_key)
-        sheet.delete_rows(row)
-        return True
-    except Exception as e:
-        logging.error(f"Ошибка удаления: {e}")
-        return False
-
-def update_price(name, new_price, point_key):
-    row = find_row_by_name(name, point_key)
-    if not row:
-        return False
-    try:
-        sheet = get_sheet("Прайс", point_key)
-        sheet.update_cell(row, 3, str(new_price))
-        return True
-    except Exception as e:
-        logging.error(f"Ошибка обновления цены: {e}")
-        return False
 
 def save_to_sheet(user_name, product, quantity, point_key):
     try:
@@ -343,7 +295,6 @@ def build_week_report_text(point_key):
         return None
 
 def build_month_report_text(point_key):
-    """Отчёт за текущий календарный месяц"""
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
@@ -377,7 +328,6 @@ def build_month_report_text(point_key):
         return None
 
 def build_month_by_name_text(point_key, month_name, year, week_range=None):
-    """Отчёт за указанный месяц (для лички)"""
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
@@ -522,14 +472,12 @@ def webhook():
 
         chat_id = update["message"]["chat"]["id"]
         chat_type = update["message"]["chat"]["type"]
-        user_id = update["message"]["from"].get("id")
         user_name = update["message"]["from"].get("first_name", "Гость")
 
         # ====================================
         # ЛИЧКА
         # ====================================
         if chat_type == "private":
-            is_admin = user_id in ADMIN_IDS
 
             # ФОТО
             if "photo" in update["message"]:
@@ -574,61 +522,6 @@ def webhook():
                 send_message(chat_id, "⚠️ Сначала выберите точку: /start")
                 return jsonify({"status": "ok"}), 200
             point_key = user_points[chat_id]
-
-            # АДМИН-КОМАНДЫ
-            if is_admin and text.startswith("/add"):
-                parts = text[4:].split("|")
-                if len(parts) == 3:
-                    cat, name, price = [p.strip() for p in parts]
-                    try:
-                        pv = float(price)
-                        if add_product(cat, name, pv, point_key):
-                            send_message(chat_id, f"✅ Добавлено в {POINTS[point_key]['name']}:\n📁 {cat}\n📦 {name}\n💰 {pv} ₸")
-                        else:
-                            send_message(chat_id, "❌ Ошибка добавления")
-                    except ValueError:
-                        send_message(chat_id, "❌ Цена должна быть числом")
-                else:
-                    send_message(chat_id, "📝 Формат: /add Категория | Название | Цена")
-                return jsonify({"status": "ok"}), 200
-
-            if is_admin and text.startswith("/del"):
-                name = text[4:].strip()
-                if delete_product(name, point_key):
-                    send_message(chat_id, f"✅ Удалено: {name}")
-                else:
-                    send_message(chat_id, f"❌ Товар «{name}» не найден")
-                return jsonify({"status": "ok"}), 200
-
-            if is_admin and text.startswith("/edit"):
-                parts = text[5:].split("|")
-                if len(parts) == 2:
-                    name, price = [p.strip() for p in parts]
-                    try:
-                        pv = float(price)
-                        if update_price(name, pv, point_key):
-                            send_message(chat_id, f"✅ Цена обновлена: {name} → {pv} ₸")
-                        else:
-                            send_message(chat_id, f"❌ Товар «{name}» не найден")
-                    except ValueError:
-                        send_message(chat_id, "❌ Цена должна быть числом")
-                else:
-                    send_message(chat_id, "📝 Формат: /edit Название | Новая цена")
-                return jsonify({"status": "ok"}), 200
-
-            if is_admin and text == "/list":
-                menu = get_menu(point_key)
-                if not menu:
-                    send_message(chat_id, "📭 Товаров нет")
-                else:
-                    msg = f"📋 ТОВАРЫ ({POINTS[point_key]['name']})\n\n"
-                    for cat, items in menu.items():
-                        msg += f"📁 {cat}\n"
-                        for name, price in items:
-                            msg += f"  • {name} — {price} ₸\n"
-                        msg += "\n"
-                    send_message(chat_id, msg)
-                return jsonify({"status": "ok"}), 200
 
             # КНОПКИ
             if text == "📊 Отчёты":
