@@ -18,12 +18,12 @@ TIMEZONE = ZoneInfo("Asia/Almaty")
 
 POINTS = {
     "point_1": {
-        "name": os.environ.get("POINT_1_NAME", "Точка 1"),
+        "name": os.environ.get("POINT_1_NAME", "Мангелик"),
         "sheet_id": SHEET_ID,
         "group_id": GROUP_CHAT_ID
     },
     "point_2": {
-        "name": os.environ.get("POINT_2_NAME", "Точка 2"),
+        "name": os.environ.get("POINT_2_NAME", "МФЦА"),
         "sheet_id": SHEET_ID_2,
         "group_id": GROUP_CHAT_ID_2
     }
