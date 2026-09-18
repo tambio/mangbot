@@ -221,25 +221,25 @@ def send_week_selection(chat_id, month_name, year):
     send_message(chat_id, f"🗓 {month_name.upper()} {year} — выберите неделю:", reply_markup={"keyboard": keyboard, "resize_keyboard": True})
 
 # ========================
-# ОТЧЁТЫ (личка)
+# ОТЧЁТЫ (личка — с ценами)
 # ========================
 
 def send_weekly_report(chat_id, point_key):
-    report = build_week_report_text(point_key)
+    report = build_week_report_text(point_key, hide_prices=False)
     if report:
         send_message(chat_id, report)
     else:
         send_message(chat_id, "📭 За неделю списаний нет")
 
 def send_monthly_report(chat_id, month_name, year, point_key, week_range=None):
-    report = build_month_by_name_text(point_key, month_name, year, week_range)
+    report = build_month_by_name_text(point_key, month_name, year, week_range, hide_prices=False)
     if report:
         send_message(chat_id, report)
     else:
         send_message(chat_id, "📭 За указанный период списаний нет")
 
 def send_period_report(chat_id, point_key, date_from, date_to):
-    report = build_period_report_text(point_key, date_from, date_to)
+    report = build_period_report_text(point_key, date_from, date_to, hide_prices=False)
     if report:
         send_message(chat_id, report)
     else:
@@ -262,7 +262,7 @@ def parse_short_date(text):
 # ОБЩИЕ ФУНКЦИИ ФОРМИРОВАНИЯ ОТЧЁТОВ
 # ========================
 
-def build_week_report_text(point_key):
+def build_week_report_text(point_key, hide_prices=False):
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
@@ -288,13 +288,16 @@ def build_week_report_text(point_key):
         point_name = POINTS[point_key]["name"]
         report = f"📊 ОТЧЁТ ЗА НЕДЕЛЮ ({point_name})\n\n"
         for product, d in stats.items():
-            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+            if hide_prices:
+                report += f"{product}: {d['qty']:.0f} шт\n"
+            else:
+                report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
         return report
     except Exception as e:
         logging.error(f"Ошибка недельного отчёта: {e}")
         return None
 
-def build_month_report_text(point_key):
+def build_month_report_text(point_key, hide_prices=False):
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
@@ -321,13 +324,16 @@ def build_month_report_text(point_key):
         month_name = MONTHS[now.month - 1]
         report = f"📊 ОТЧЁТ ЗА {month_name} {now.year} ({point_name})\n\n"
         for product, d in stats.items():
-            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+            if hide_prices:
+                report += f"{product}: {d['qty']:.0f} шт\n"
+            else:
+                report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
         return report
     except Exception as e:
         logging.error(f"Ошибка месячного отчёта: {e}")
         return None
 
-def build_month_by_name_text(point_key, month_name, year, week_range=None):
+def build_month_by_name_text(point_key, month_name, year, week_range=None, hide_prices=False):
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
@@ -358,13 +364,16 @@ def build_month_by_name_text(point_key, month_name, year, week_range=None):
         else:
             report = f"📊 ОТЧЁТ ЗА {month_name} {year} ({point_name})\n\n"
         for product, d in stats.items():
-            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+            if hide_prices:
+                report += f"{product}: {d['qty']:.0f} шт\n"
+            else:
+                report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
         return report
     except Exception as e:
         logging.error(f"Ошибка месячного отчёта: {e}")
         return None
 
-def build_period_report_text(point_key, date_from, date_to):
+def build_period_report_text(point_key, date_from, date_to, hide_prices=False):
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
@@ -391,8 +400,12 @@ def build_period_report_text(point_key, date_from, date_to):
         point_name = POINTS[point_key]["name"]
         report = f"📊 ОТЧЁТ ЗА {date_from.strftime('%d.%m.%y')} – {date_to.strftime('%d.%m.%y')} ({point_name})\n\n"
         for product, d in stats.items():
-            report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
-        report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
+            if hide_prices:
+                report += f"{product}: {d['qty']:.0f} шт\n"
+            else:
+                report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+        if not hide_prices:
+            report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
         return report
     except Exception as e:
         logging.error(f"Ошибка отчёта за период: {e}")
@@ -418,7 +431,7 @@ def webhook():
         update = request.get_json()
 
         # ====================================
-        # CALLBACK QUERY (нажатия inline-кнопок)
+        # CALLBACK QUERY (нажатия inline-кнопок в группе)
         # ====================================
         if "callback_query" in update:
             cq = update["callback_query"]
@@ -441,17 +454,17 @@ def webhook():
 
             if data == "p7":
                 answer_callback(callback_id)
-                report = build_week_report_text(point_key)
+                report = build_week_report_text(point_key, hide_prices=True)
                 send_message(chat_id, report if report else "📭 За 7 дней списаний нет")
             elif data == "p30":
                 answer_callback(callback_id)
                 date_to = datetime.now(TIMEZONE).date()
                 date_from = date_to - timedelta(days=30)
-                report = build_period_report_text(point_key, date_from, date_to)
+                report = build_period_report_text(point_key, date_from, date_to, hide_prices=True)
                 send_message(chat_id, report if report else "📭 За 30 дней списаний нет")
             elif data == "pmonth":
                 answer_callback(callback_id)
-                report = build_month_report_text(point_key)
+                report = build_month_report_text(point_key, hide_prices=True)
                 send_message(chat_id, report if report else "📭 За этот месяц списаний нет")
             elif data == "pcustom":
                 answer_callback(callback_id)
@@ -647,7 +660,7 @@ def webhook():
             return jsonify({"status": "ok"}), 200
 
         # ====================================
-        # ГРУППА (только команды)
+        # ГРУППА (только команды, БЕЗ ЦЕН)
         # ====================================
         group_key = str(chat_id)
         if group_key not in GROUP_TO_POINT:
@@ -678,7 +691,7 @@ def webhook():
                 if d_end < d_start:
                     send_message(chat_id, "❌ Дата конца раньше начала. Введите КОНЕЦ ещё раз:")
                     return jsonify({"status": "ok"}), 200
-                report = build_period_report_text(point_key, d_start, d_end)
+                report = build_period_report_text(point_key, d_start, d_end, hide_prices=True)
                 send_message(chat_id, report if report else "📭 За этот период списаний нет")
                 del user_data[chat_id]
                 return jsonify({"status": "ok"}), 200
@@ -694,10 +707,10 @@ def webhook():
         if cmd == "/help":
             send_group_help(chat_id)
         elif cmd == "/report":
-            report = build_week_report_text(point_key)
+            report = build_week_report_text(point_key, hide_prices=True)
             send_message(chat_id, report if report else "📭 За 7 дней списаний нет")
         elif cmd == "/month":
-            report = build_month_report_text(point_key)
+            report = build_month_report_text(point_key, hide_prices=True)
             send_message(chat_id, report if report else "📭 За этот месяц списаний нет")
         elif cmd == "/period":
             keyboard = {
