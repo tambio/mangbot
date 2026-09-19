@@ -26,6 +26,9 @@ from utils import (
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# Секретный ключ для cron-запросов (задаётся в Render → Environment)
+CRON_SECRET = os.environ.get("CRON_SECRET", "")
+
 # ========================
 # GOOGLE SHEETS
 # ========================
@@ -362,6 +365,49 @@ def send_group_help(chat_id):
     send_message(chat_id, help_text)
 
 # ========================
+# CRON (автоотчёты)
+# ========================
+
+@app.route('/cron/weekly', methods=['GET'])
+def cron_weekly():
+    """Автоотправка недельного отчёта в обе группы. Вызывается cron-job.org."""
+    key = request.args.get("key", "")
+    if not CRON_SECRET or key != CRON_SECRET:
+        return jsonify({"status": "error", "message": "unauthorized"}), 403
+
+    for point_key, pdata in POINTS.items():
+        group_id = pdata.get("group_id")
+        if not group_id:
+            continue
+        report = build_week_report_text(point_key, hide_prices=True)
+        if report:
+            send_message(group_id, report)
+        else:
+            send_message(group_id, f"📭 За неделю списаний нет ({pdata['name']})")
+
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route('/cron/monthly', methods=['GET'])
+def cron_monthly():
+    """Автоотправка месячного отчёта в обе группы. Вызывается cron-job.org."""
+    key = request.args.get("key", "")
+    if not CRON_SECRET or key != CRON_SECRET:
+        return jsonify({"status": "error", "message": "unauthorized"}), 403
+
+    for point_key, pdata in POINTS.items():
+        group_id = pdata.get("group_id")
+        if not group_id:
+            continue
+        report = build_month_report_text(point_key, hide_prices=True)
+        if report:
+            send_message(group_id, report)
+        else:
+            send_message(group_id, f"📭 За этот месяц списаний нет ({pdata['name']})")
+
+    return jsonify({"status": "ok"}), 200
+
+# ========================
 # WEBHOOK
 # ========================
 
@@ -458,7 +504,6 @@ def webhook():
 
             # ===== ГЛАВНОЕ МЕНЮ (вместо /start) =====
             if text == "/start" or text == "🏠 Главное меню":
-                # Сброс выбранной точки и временных состояний
                 user_points.pop(chat_id, None)
                 if chat_id in user_data:
                     del user_data[chat_id]
