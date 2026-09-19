@@ -135,6 +135,7 @@ def send_reports_menu(chat_id, point_key):
         ["📆 За текущую неделю"],
         ["📅 За месяц"],
         ["📊 За период"],
+        ["Сверка"],
         ["◀️ Назад"]
     ], "resize_keyboard": True}
     send_message(chat_id, "📊 ВЫБЕРИТЕ ТИП ОТЧЁТА:", reply_markup=keyboard)
@@ -166,24 +167,31 @@ def send_week_selection(chat_id, month_name, year):
     send_message(chat_id, f"🗓 {month_name.upper()} {year} — выберите неделю:", reply_markup={"keyboard": keyboard, "resize_keyboard": True})
 
 # ========================
-# ОТЧЁТЫ (личка — с ценами)
+# ОТЧЁТЫ (личка)
 # ========================
 
 def send_weekly_report(chat_id, point_key):
-    report = build_week_report_text(point_key, hide_prices=False)
+    report = build_week_report_text(point_key, hide_prices=True)
     if report:
         send_message(chat_id, report)
     else:
         send_message(chat_id, "📭 За неделю списаний нет")
 
 def send_monthly_report(chat_id, month_name, year, point_key, week_range=None):
-    report = build_month_by_name_text(point_key, month_name, year, week_range, hide_prices=False)
+    report = build_month_by_name_text(point_key, month_name, year, week_range, hide_prices=True)
     if report:
         send_message(chat_id, report)
     else:
         send_message(chat_id, "📭 За указанный период списаний нет")
 
 def send_period_report(chat_id, point_key, date_from, date_to):
+    report = build_period_report_text(point_key, date_from, date_to, hide_prices=True)
+    if report:
+        send_message(chat_id, report)
+    else:
+        send_message(chat_id, "📭 За этот период списаний нет")
+
+def send_sverka_report(chat_id, point_key, date_from, date_to):
     report = build_period_report_text(point_key, date_from, date_to, hide_prices=False)
     if report:
         send_message(chat_id, report)
@@ -484,6 +492,12 @@ def webhook():
                     "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\nНапример: 01.09.26",
                     reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
+            if text == "Сверка":
+                user_data[chat_id] = {"waiting_for": "sverka_start"}
+                send_message(chat_id,
+                    "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\nНапример: 01.09.26",
+                    reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                return jsonify({"status": "ok"}), 200
             if text == "📸 Обстановка на точке":
                 user_data[chat_id] = {"waiting_for": "point_photo"}
                 send_message(chat_id, "📸 Отправьте фото:")
@@ -503,7 +517,7 @@ def webhook():
                 send_reports_menu(chat_id, point_key)
                 return jsonify({"status": "ok"}), 200
 
-            # ВВОД ДАТЫ НАЧАЛА ПЕРИОДА
+            # ВВОД ДАТЫ НАЧАЛА ПЕРИОДА (📊 За период)
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "period_start":
                 d = parse_short_date(text)
                 if not d:
@@ -526,6 +540,33 @@ def webhook():
                     send_message(chat_id, "❌ Дата конца раньше начала. Введите КОНЕЦ ещё раз:")
                     return jsonify({"status": "ok"}), 200
                 send_period_report(chat_id, point_key, d_start, d_end)
+                del user_data[chat_id]
+                send_reports_menu(chat_id, point_key)
+                return jsonify({"status": "ok"}), 200
+
+            # ВВОД ДАТЫ НАЧАЛА ДЛЯ СВЕРКИ
+            if chat_id in user_data and user_data[chat_id].get("waiting_for") == "sverka_start":
+                d = parse_short_date(text)
+                if not d:
+                    send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 01.09.26",
+                                 reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                    return jsonify({"status": "ok"}), 200
+                user_data[chat_id] = {"waiting_for": "sverka_end", "date_from": d}
+                send_message(chat_id, "📅 Введите дату КОНЦА в формате ДД.ММ.ГГ\n\nНапример: 15.09.26",
+                             reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                return jsonify({"status": "ok"}), 200
+
+            if chat_id in user_data and user_data[chat_id].get("waiting_for") == "sverka_end":
+                d_end = parse_short_date(text)
+                if not d_end:
+                    send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 15.09.26",
+                                 reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                    return jsonify({"status": "ok"}), 200
+                d_start = user_data[chat_id]["date_from"]
+                if d_end < d_start:
+                    send_message(chat_id, "❌ Дата конца раньше начала. Введите КОНЕЦ ещё раз:")
+                    return jsonify({"status": "ok"}), 200
+                send_sverka_report(chat_id, point_key, d_start, d_end)
                 del user_data[chat_id]
                 send_reports_menu(chat_id, point_key)
                 return jsonify({"status": "ok"}), 200
