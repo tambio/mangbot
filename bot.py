@@ -114,7 +114,7 @@ def send_main_menu(chat_id, point_key):
     if row:
         keyboard.append(row)
     keyboard.append(["📊 Отчёты", "📸 Обстановка на точке"])
-    keyboard.append(["➕ Другое", "🏪 Сменить точку"])
+    keyboard.append(["➕ Другое", "🏠 Главное меню"])
     keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
     point_name = POINTS[point_key]["name"]
     send_message(chat_id, f"📍 Точка: {point_name}\n🍽 Выберите категорию:", reply_markup=keyboard_obj)
@@ -127,7 +127,7 @@ def send_category_menu(chat_id, category, point_key):
         send_main_menu(chat_id, point_key)
         return
     keyboard = [[name] for name, price in items]
-    keyboard.append(["◀️ Назад"])
+    keyboard.append(["🏠 Главное меню"])
     send_message(chat_id, f"📦 {category}:", reply_markup={"keyboard": keyboard, "resize_keyboard": True})
 
 def send_reports_menu(chat_id, point_key):
@@ -136,7 +136,7 @@ def send_reports_menu(chat_id, point_key):
         ["📅 За месяц"],
         ["📊 За период"],
         ["Сверка"],
-        ["◀️ Назад"]
+        ["🏠 Главное меню"]
     ], "resize_keyboard": True}
     send_message(chat_id, "📊 ВЫБЕРИТЕ ТИП ОТЧЁТА:", reply_markup=keyboard)
 
@@ -148,7 +148,7 @@ def send_month_selection(chat_id):
         if len(row) == 3 or i == len(MONTHS) - 1:
             months_kb.append(row.copy())
             row = []
-    months_kb.append(["◀️ Назад"])
+    months_kb.append(["🏠 Главное меню"])
     send_message(chat_id, "🗓 ВЫБЕРИТЕ МЕСЯЦ:", reply_markup={"keyboard": months_kb, "resize_keyboard": True})
 
 def send_week_selection(chat_id, month_name, year):
@@ -163,7 +163,7 @@ def send_week_selection(chat_id, month_name, year):
     keyboard = []
     for ws, we in weeks:
         keyboard.append([f"{ws}-{we} {month_name}" if ws != we else f"{ws} {month_name}"])
-    keyboard.append(["Весь месяц", "◀️ Назад"])
+    keyboard.append(["Весь месяц", "🏠 Главное меню"])
     send_message(chat_id, f"🗓 {month_name.upper()} {year} — выберите неделю:", reply_markup={"keyboard": keyboard, "resize_keyboard": True})
 
 # ========================
@@ -456,10 +456,16 @@ def webhook():
 
             text = update["message"].get("text", "").strip()
 
-            if text == "/start":
+            # ===== ГЛАВНОЕ МЕНЮ (вместо /start) =====
+            if text == "/start" or text == "🏠 Главное меню":
+                # Сброс выбранной точки и временных состояний
+                user_points.pop(chat_id, None)
+                if chat_id in user_data:
+                    del user_data[chat_id]
                 send_point_selection(chat_id)
                 return jsonify({"status": "ok"}), 200
 
+            # ВЫБОР ТОЧКИ
             for pk, pdata in POINTS.items():
                 if text == f"🏠 {pdata['name']}":
                     user_points[chat_id] = pk
@@ -467,12 +473,8 @@ def webhook():
                     send_main_menu(chat_id, pk)
                     return jsonify({"status": "ok"}), 200
 
-            if text == "🏪 Сменить точку":
-                send_point_selection(chat_id)
-                return jsonify({"status": "ok"}), 200
-
             if chat_id not in user_points:
-                send_message(chat_id, "⚠️ Сначала выберите точку: /start")
+                send_point_selection(chat_id)
                 return jsonify({"status": "ok"}), 200
             point_key = user_points[chat_id]
 
@@ -490,31 +492,28 @@ def webhook():
                 user_data[chat_id] = {"waiting_for": "period_start"}
                 send_message(chat_id,
                     "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\nНапример: 01.09.26",
-                    reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                    reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
             if text == "Сверка":
                 user_data[chat_id] = {"waiting_for": "sverka_start"}
                 send_message(chat_id,
                     "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\nНапример: 01.09.26",
-                    reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                    reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
             if text == "📸 Обстановка на точке":
                 user_data[chat_id] = {"waiting_for": "point_photo"}
-                send_message(chat_id, "📸 Отправьте фото:")
+                send_message(chat_id, "📸 Отправьте фото:",
+                             reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
             if text == "➕ Другое":
                 user_data[chat_id] = {"waiting_for": "other_product"}
-                send_message(chat_id, "✏️ Напишите название позиции:")
+                send_message(chat_id, "✏️ Напишите название позиции:",
+                             reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
             if text == "◀️ Назад":
                 if chat_id in user_data:
                     del user_data[chat_id]
                 send_main_menu(chat_id, point_key)
-                return jsonify({"status": "ok"}), 200
-            if text == "◀️ Отмена":
-                if chat_id in user_data:
-                    del user_data[chat_id]
-                send_reports_menu(chat_id, point_key)
                 return jsonify({"status": "ok"}), 200
 
             # ВВОД ДАТЫ НАЧАЛА ПЕРИОДА (📊 За период)
@@ -522,18 +521,18 @@ def webhook():
                 d = parse_short_date(text)
                 if not d:
                     send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 01.09.26",
-                                 reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                                 reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                     return jsonify({"status": "ok"}), 200
                 user_data[chat_id] = {"waiting_for": "period_end", "date_from": d}
                 send_message(chat_id, "📅 Введите дату КОНЦА в формате ДД.ММ.ГГ\n\nНапример: 15.09.26",
-                             reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                             reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
 
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "period_end":
                 d_end = parse_short_date(text)
                 if not d_end:
                     send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 15.09.26",
-                                 reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                                 reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                     return jsonify({"status": "ok"}), 200
                 d_start = user_data[chat_id]["date_from"]
                 if d_end < d_start:
@@ -549,18 +548,18 @@ def webhook():
                 d = parse_short_date(text)
                 if not d:
                     send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 01.09.26",
-                                 reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                                 reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                     return jsonify({"status": "ok"}), 200
                 user_data[chat_id] = {"waiting_for": "sverka_end", "date_from": d}
                 send_message(chat_id, "📅 Введите дату КОНЦА в формате ДД.ММ.ГГ\n\nНапример: 15.09.26",
-                             reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                             reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
 
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "sverka_end":
                 d_end = parse_short_date(text)
                 if not d_end:
                     send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 15.09.26",
-                                 reply_markup={"keyboard": [["◀️ Отмена"]], "resize_keyboard": True})
+                                 reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                     return jsonify({"status": "ok"}), 200
                 d_start = user_data[chat_id]["date_from"]
                 if d_end < d_start:
@@ -614,7 +613,8 @@ def webhook():
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "other_product":
                 product = text
                 user_data[chat_id] = {"waiting_for": "quantity_other", "product": product}
-                send_message(chat_id, f"📝 Введите количество для {product}:")
+                send_message(chat_id, f"📝 Введите количество для {product}:",
+                             reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
 
             menu = get_menu(point_key)
@@ -626,10 +626,12 @@ def webhook():
                 for name, price in items:
                     if text == name:
                         user_data[chat_id] = {"waiting_for": "quantity", "product": name}
-                        send_message(chat_id, f"📝 Введите количество для {name}:")
+                        send_message(chat_id, f"📝 Введите количество для {name}:",
+                                     reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                         return jsonify({"status": "ok"}), 200
 
-            send_message(chat_id, "❌ Используйте кнопки меню")
+            send_message(chat_id, "❌ Используйте кнопки меню",
+                         reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
             return jsonify({"status": "ok"}), 200
 
         # ====================================
