@@ -26,10 +26,10 @@ from utils import (
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Секретный ключ для cron-запросов (задаётся в Render → Environment)
+#  ключ для cron-запросов
 CRON_SECRET = os.environ.get("CRON_SECRET", "")
 
-# ========================
+# ===================
 # GOOGLE SHEETS
 # ========================
 
