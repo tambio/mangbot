@@ -44,30 +44,29 @@ def get_sheet(sheet_name, point_key=None):
     return client.open_by_key(sheet_id).worksheet(sheet_name)
 
 def get_menu(point_key):
+    """Возвращает список всех позиций: [(название, цена), ...]"""
     try:
         sheet = get_sheet("Прайс", point_key)
         data = sheet.get_all_values()
-        menu = {}
+        items = []
         for row in data[1:]:
-            if len(row) >= 3 and row[0].strip() and row[1].strip():
-                cat = row[0].strip()
+            if len(row) >= 3 and row[1].strip():
                 name = row[1].strip()
                 try:
                     price = float(row[2])
                 except:
                     price = 0
-                menu.setdefault(cat, []).append((name, price))
-        return menu
+                items.append((name, price))
+        return items
     except Exception as e:
         logging.error(f"Ошибка чтения меню: {e}")
-        return {}
+        return []
 
 def get_price(product_name, point_key):
-    menu = get_menu(point_key)
-    for cat, items in menu.items():
-        for name, price in items:
-            if name == product_name:
-                return price
+    items = get_menu(point_key)
+    for name, price in items:
+        if name == product_name:
+            return price
     return 0
 
 def save_to_sheet(user_name, product, quantity, point_key):
@@ -105,33 +104,25 @@ def send_point_selection(chat_id):
     send_message(chat_id, "🏪 ВЫБЕРИТЕ ТОЧКУ:", reply_markup=keyboard)
 
 def send_main_menu(chat_id, point_key):
-    menu = get_menu(point_key)
-    categories = list(menu.keys())
+    """Главное меню — все позиции сразу кнопками, без категорий"""
+    items = get_menu(point_key)
+    
+    # Строим клавиатуру: по 2 кнопки в ряд
     keyboard = []
     row = []
-    for cat in categories:
-        row.append(cat)
+    for name, price in items:
+        row.append(name)
         if len(row) == 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
+    
     keyboard.append(["📊 Отчёты", "📸 Обстановка на точке"])
     keyboard.append(["➕ Другое", "🏠 Главное меню"])
     keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
     point_name = POINTS[point_key]["name"]
-    send_message(chat_id, f"📍 Точка: {point_name}\n🍽 Выберите категорию:", reply_markup=keyboard_obj)
-
-def send_category_menu(chat_id, category, point_key):
-    menu = get_menu(point_key)
-    items = menu.get(category, [])
-    if not items:
-        send_message(chat_id, f"❌ В категории «{category}» нет товаров")
-        send_main_menu(chat_id, point_key)
-        return
-    keyboard = [[name] for name, price in items]
-    keyboard.append(["🏠 Главное меню"])
-    send_message(chat_id, f"📦 {category}:", reply_markup={"keyboard": keyboard, "resize_keyboard": True})
+    send_message(chat_id, f"📍 Точка: {point_name}\n🍽 Выберите позицию:", reply_markup=keyboard_obj)
 
 def send_reports_menu(chat_id, point_key):
     keyboard = {"keyboard": [
@@ -370,7 +361,6 @@ def send_group_help(chat_id):
 
 @app.route('/cron/weekly', methods=['GET'])
 def cron_weekly():
-    """Автоотправка недельного отчёта в обе группы. Вызывается cron-job.org."""
     key = request.args.get("key", "")
     if not CRON_SECRET or key != CRON_SECRET:
         return jsonify({"status": "error", "message": "unauthorized"}), 403
@@ -390,7 +380,6 @@ def cron_weekly():
 
 @app.route('/cron/monthly', methods=['GET'])
 def cron_monthly():
-    """Автоотправка месячного отчёта в обе группы. Вызывается cron-job.org."""
     key = request.args.get("key", "")
     if not CRON_SECRET or key != CRON_SECRET:
         return jsonify({"status": "error", "message": "unauthorized"}), 403
@@ -502,7 +491,7 @@ def webhook():
 
             text = update["message"].get("text", "").strip()
 
-            # ===== ГЛАВНОЕ МЕНЮ (вместо /start) =====
+            # ===== ГЛАВНОЕ МЕНЮ =====
             if text == "/start" or text == "🏠 Главное меню":
                 user_points.pop(chat_id, None)
                 if chat_id in user_data:
@@ -555,13 +544,8 @@ def webhook():
                 send_message(chat_id, "✏️ Напишите название позиции:",
                              reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
-            if text == "◀️ Назад":
-                if chat_id in user_data:
-                    del user_data[chat_id]
-                send_main_menu(chat_id, point_key)
-                return jsonify({"status": "ok"}), 200
 
-            # ВВОД ДАТЫ НАЧАЛА ПЕРИОДА (📊 За период)
+            # ВВОД ДАТЫ НАЧАЛА ПЕРИОДА
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "period_start":
                 d = parse_short_date(text)
                 if not d:
@@ -588,7 +572,7 @@ def webhook():
                 send_reports_menu(chat_id, point_key)
                 return jsonify({"status": "ok"}), 200
 
-            # ВВОД ДАТЫ НАЧАЛА ДЛЯ СВЕРКИ
+            # ВВОД ДАТЫ ДЛЯ СВЕРКИ
             if chat_id in user_data and user_data[chat_id].get("waiting_for") == "sverka_start":
                 d = parse_short_date(text)
                 if not d:
@@ -662,18 +646,14 @@ def webhook():
                              reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
 
-            menu = get_menu(point_key)
-            if text in menu:
-                send_category_menu(chat_id, text, point_key)
-                return jsonify({"status": "ok"}), 200
-
-            for cat, items in menu.items():
-                for name, price in items:
-                    if text == name:
-                        user_data[chat_id] = {"waiting_for": "quantity", "product": name}
-                        send_message(chat_id, f"📝 Введите количество для {name}:",
-                                     reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                        return jsonify({"status": "ok"}), 200
+            # НАЖАТИЕ НА ПОЗИЦИЮ (все позиции в одном списке)
+            items = get_menu(point_key)
+            for name, price in items:
+                if text == name:
+                    user_data[chat_id] = {"waiting_for": "quantity", "product": name}
+                    send_message(chat_id, f"📝 Введите количество для {name}:",
+                                 reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
+                    return jsonify({"status": "ok"}), 200
 
             send_message(chat_id, "❌ Используйте кнопки меню",
                          reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
@@ -760,7 +740,7 @@ def webhook():
 
 @app.route('/', methods=['GET'])
 def index():
-    return "Бот учёта списаний (2 точки) работает!", 200
+    return "Kontrol — бот учёта списаний работает!", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
