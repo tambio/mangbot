@@ -50,10 +50,10 @@ def get_menu(point_key):
         data = sheet.get_all_values()
         items = []
         for row in data[1:]:
-            if len(row) >= 3 and row[1].strip():
-                name = row[1].strip()
+            if len(row) >= 2 and row[0].strip():
+                name = row[0].strip()
                 try:
-                    price = float(row[2])
+                    price = float(row[1])
                 except:
                     price = 0
                 items.append((name, price))
