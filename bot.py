@@ -26,10 +26,9 @@ from utils import (
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-#  ключ для cron-запросов
 CRON_SECRET = os.environ.get("CRON_SECRET", "")
 
-# ===================
+# ========================
 # GOOGLE SHEETS
 # ========================
 
@@ -44,7 +43,6 @@ def get_sheet(sheet_name, point_key=None):
     return client.open_by_key(sheet_id).worksheet(sheet_name)
 
 def get_menu(point_key):
-    """Возвращает список всех позиций: [(название, цена), ...]"""
     try:
         sheet = get_sheet("Прайс", point_key)
         data = sheet.get_all_values()
@@ -68,6 +66,22 @@ def get_price(product_name, point_key):
         if name == product_name:
             return price
     return 0
+
+def get_employees(point_key):
+    """Читает лист 'Сотрудники'. Возвращает список username без @"""
+    try:
+        sheet = get_sheet("Сотрудники", point_key)
+        data = sheet.get_all_values()
+        usernames = []
+        for row in data[1:]:
+            if len(row) >= 1 and row[0].strip():
+                username = row[0].strip().lstrip("@")
+                if username:
+                    usernames.append(username)
+        return usernames
+    except Exception as e:
+        logging.error(f"Ошибка чтения сотрудников: {e}")
+        return []
 
 def save_to_sheet(user_name, product, quantity, point_key):
     try:
@@ -101,13 +115,10 @@ def send_point_selection(chat_id):
         "resize_keyboard": True,
         "one_time_keyboard": True
     }
-    send_message(chat_id, "🏪 ВЫБЕРИТЕ ТОЧКУ:", reply_markup=keyboard)
+    send_message(chat_id, "🏪 ВЫБЕРИТЕ ТОЧКУ: 🏪", reply_markup=keyboard)
 
 def send_main_menu(chat_id, point_key):
-    """Главное меню — все позиции сразу кнопками, без категорий"""
     items = get_menu(point_key)
-    
-    # Строим клавиатуру: по 2 кнопки в ряд
     keyboard = []
     row = []
     for name, price in items:
@@ -117,8 +128,7 @@ def send_main_menu(chat_id, point_key):
             row = []
     if row:
         keyboard.append(row)
-    
-    keyboard.append(["📊 Отчёты", "📸 Обстановка на точке"])
+    keyboard.append(["📊 Отчёты", "📸 Обстановка"])
     keyboard.append(["➕ Другое", "🏠 Главное меню"])
     keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
     point_name = POINTS[point_key]["name"]
@@ -161,7 +171,7 @@ def send_week_selection(chat_id, month_name, year):
     send_message(chat_id, f"🗓 {month_name.upper()} {year} — выберите неделю:", reply_markup={"keyboard": keyboard, "resize_keyboard": True})
 
 # ========================
-# ОТЧЁТЫ (личка)
+# ОТЧЁТЫ
 # ========================
 
 def send_weekly_report(chat_id, point_key):
@@ -193,7 +203,7 @@ def send_sverka_report(chat_id, point_key, date_from, date_to):
         send_message(chat_id, "📭 За этот период списаний нет")
 
 # ========================
-# ОБЩИЕ ФУНКЦИИ ФОРМИРОВАНИЯ ОТЧЁТОВ
+# ФОРМИРОВАНИЕ ОТЧЁТОВ
 # ========================
 
 def build_week_report_text(point_key, hide_prices=False):
@@ -356,7 +366,7 @@ def send_group_help(chat_id):
     send_message(chat_id, help_text)
 
 # ========================
-# CRON (автоотчёты)
+# CRON (автоотчёты + напоминания)
 # ========================
 
 @app.route('/cron/weekly', methods=['GET'])
@@ -396,6 +406,37 @@ def cron_monthly():
 
     return jsonify({"status": "ok"}), 200
 
+
+@app.route('/cron/remind', methods=['GET'])
+def cron_remind():
+    """Напоминание бариста о списаниях. Вызывается каждый день в 19:00."""
+    key = request.args.get("key", "")
+    if not CRON_SECRET or key != CRON_SECRET:
+        return jsonify({"status": "error", "message": "unauthorized"}), 403
+
+    results = []
+    for point_key, pdata in POINTS.items():
+        group_id = pdata.get("group_id")
+        if not group_id:
+            continue
+
+        usernames = get_employees(point_key)
+        if not usernames:
+            results.append({"point": pdata["name"], "status": "no_employees"})
+            continue
+
+        # Формируем строку с тегами
+        tags = " ".join([f"@{u}" for u in usernames])
+        text = (
+            f"🔔 {tags}\n\n"
+            f"Напоминание: не забудь! внести списания за сегодня!\n"
+            f"📍 Точка: {pdata['name']}"
+        )
+        send_message(group_id, text)
+        results.append({"point": pdata["name"], "status": "sent", "count": len(usernames)})
+
+    return jsonify({"status": "ok", "results": results}), 200
+
 # ========================
 # WEBHOOK
 # ========================
@@ -405,9 +446,7 @@ def webhook():
     try:
         update = request.get_json()
 
-        # ====================================
         # CALLBACK QUERY (нажатия inline-кнопок в группе)
-        # ====================================
         if "callback_query" in update:
             cq = update["callback_query"]
             callback_id = cq["id"]
@@ -452,9 +491,7 @@ def webhook():
 
             return jsonify({"status": "ok"}), 200
 
-        # ====================================
         # MESSAGE
-        # ====================================
         if "message" not in update:
             return jsonify({"status": "ok"}), 200
 
@@ -462,9 +499,7 @@ def webhook():
         chat_type = update["message"]["chat"]["type"]
         user_name = update["message"]["from"].get("first_name", "Гость")
 
-        # ====================================
         # ЛИЧКА
-        # ====================================
         if chat_type == "private":
 
             # ФОТО
@@ -491,7 +526,6 @@ def webhook():
 
             text = update["message"].get("text", "").strip()
 
-            # ===== ГЛАВНОЕ МЕНЮ =====
             if text == "/start" or text == "🏠 Главное меню":
                 user_points.pop(chat_id, None)
                 if chat_id in user_data:
@@ -499,7 +533,6 @@ def webhook():
                 send_point_selection(chat_id)
                 return jsonify({"status": "ok"}), 200
 
-            # ВЫБОР ТОЧКИ
             for pk, pdata in POINTS.items():
                 if text == f"🏠 {pdata['name']}":
                     user_points[chat_id] = pk
@@ -512,7 +545,6 @@ def webhook():
                 return jsonify({"status": "ok"}), 200
             point_key = user_points[chat_id]
 
-            # КНОПКИ
             if text == "📊 Отчёты":
                 send_reports_menu(chat_id, point_key)
                 return jsonify({"status": "ok"}), 200
@@ -646,7 +678,7 @@ def webhook():
                              reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
 
-            # НАЖАТИЕ НА ПОЗИЦИЮ (все позиции в одном списке)
+            # НАЖАТИЕ НА ПОЗИЦИЮ
             items = get_menu(point_key)
             for name, price in items:
                 if text == name:
@@ -659,9 +691,7 @@ def webhook():
                          reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
             return jsonify({"status": "ok"}), 200
 
-        # ====================================
         # ГРУППА (только команды, БЕЗ ЦЕН)
-        # ====================================
         group_key = str(chat_id)
         if group_key not in GROUP_TO_POINT:
             return jsonify({"status": "ok"}), 200
@@ -669,7 +699,6 @@ def webhook():
         point_key = GROUP_TO_POINT[group_key]
         text = update["message"].get("text", "").strip()
 
-        # Ожидание ввода дат
         if chat_id in user_data:
             state = user_data[chat_id]
 
@@ -698,7 +727,6 @@ def webhook():
 
             return jsonify({"status": "ok"}), 200
 
-        # Не команда — молчим
         if not text.startswith("/"):
             return jsonify({"status": "ok"}), 200
 
