@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 import requests
 from datetime import datetime, timedelta
 import calendar
@@ -68,7 +68,6 @@ def get_price(product_name, point_key):
     return 0
 
 def get_employees(point_key):
-    """Читает лист 'Сотрудники'. Возвращает список username без @"""
     try:
         sheet = get_sheet("Сотрудники", point_key)
         data = sheet.get_all_values()
@@ -104,6 +103,61 @@ def save_to_sheet(user_name, product, quantity, point_key):
         return False, 0
 
 # ========================
+# WEB APP (Витрина)
+# ========================
+
+@app.route('/webapp')
+def webapp():
+    """Отдает HTML-файл мини-приложения"""
+    return send_file('webapp.html')
+
+@app.route('/api/menu')
+def api_menu():
+    """Возвращает список товаров в JSON для мини-аппа"""
+    point_key = request.args.get('point', 'point_1')
+    items = get_menu(point_key)
+    result = [{"name": name, "price": price} for name, price in items]
+    return jsonify(result)
+
+@app.route('/api/submit', methods=['POST'])
+def api_submit():
+    """Принимает корзину из мини-аппа и записывает в таблицу пачкой"""
+    try:
+        data = request.get_json()
+        chat_id = data.get('chat_id')
+        user_name = data.get('user_name')
+        point_key = data.get('point_key')
+        cart = data.get('cart', {})
+
+        if not cart:
+            return jsonify({"status": "error", "message": "Корзина пуста"})
+
+        sheet = get_sheet("СПИСАНИЕ", point_key)
+        now = datetime.now(TIMEZONE)
+        date_str = now.strftime("%d.%m.%Y")
+        time_str = now.strftime("%H:%M:%S")
+
+        rows_to_insert = []
+        for product_name, qty in cart.items():
+            price = get_price(product_name, point_key)
+            loss = price * qty
+            rows_to_insert.append([
+                date_str, time_str, user_name, product_name, str(qty), str(price), str(loss)
+            ])
+
+        # Записываем все строки разом
+        sheet.append_rows(rows_to_insert)
+
+        # Отправляем сообщение в чат бота
+        if chat_id:
+            send_message(chat_id, f"✅ Успешно списано {len(rows_to_insert)} позиций через витрину!")
+
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        logging.error(f"Ошибка витрины: {e}")
+        return jsonify({"status": "error", "message": str(e)})
+
+# ========================
 # МЕНЮ
 # ========================
 
@@ -115,7 +169,7 @@ def send_point_selection(chat_id):
         "resize_keyboard": True,
         "one_time_keyboard": True
     }
-    send_message(chat_id, "🏪 ВЫБЕРИТЕ ТОЧКУ: 🏪", reply_markup=keyboard)
+    send_message(chat_id, "🏪 ВЫБЕРИТЕ ТОЧКУ:", reply_markup=keyboard)
 
 def send_main_menu(chat_id, point_key):
     items = get_menu(point_key)
@@ -128,11 +182,15 @@ def send_main_menu(chat_id, point_key):
             row = []
     if row:
         keyboard.append(row)
+    
+    # ДОБАВЛЕНА КНОПКА ВИТРИНЫ
+    keyboard.append(["🛒 Открыть витрину (Mini App)"])
+    
     keyboard.append(["📊 Отчёты", "📸 Обстановка"])
     keyboard.append(["➕ Другое", "🏠 Главное меню"])
     keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
     point_name = POINTS[point_key]["name"]
-    send_message(chat_id, f"📍 Точка: {point_name}\n🍽 Выберите позицию:", reply_markup=keyboard_obj)
+    send_message(chat_id, f"📍 Точка: {point_name}\n🍽 Выберите позицию или откройте витрину:", reply_markup=keyboard_obj)
 
 def send_reports_menu(chat_id, point_key):
     keyboard = {"keyboard": [
@@ -387,7 +445,6 @@ def cron_weekly():
 
     return jsonify({"status": "ok"}), 200
 
-
 @app.route('/cron/monthly', methods=['GET'])
 def cron_monthly():
     key = request.args.get("key", "")
@@ -406,10 +463,8 @@ def cron_monthly():
 
     return jsonify({"status": "ok"}), 200
 
-
 @app.route('/cron/remind', methods=['GET'])
 def cron_remind():
-    """Напоминание бариста о списаниях. Вызывается каждый день в 19:00."""
     key = request.args.get("key", "")
     if not CRON_SECRET or key != CRON_SECRET:
         return jsonify({"status": "error", "message": "unauthorized"}), 403
@@ -425,7 +480,6 @@ def cron_remind():
             results.append({"point": pdata["name"], "status": "no_employees"})
             continue
 
-        # Формируем строку с тегами
         tags = " ".join([f"@{u}" for u in usernames])
         text = (
             f"🔔 {tags}\n\n"
@@ -545,6 +599,17 @@ def webhook():
                 return jsonify({"status": "ok"}), 200
             point_key = user_points[chat_id]
 
+            # ОТКРЫТИЕ ВИТРИНЫ
+            if text == "🛒 Открыть витрину (Mini App)":
+                web_app_url = f"https://coffee-spisanie-bot.onrender.com/webapp?point={point_key}&user={user_name}&chat_id={chat_id}"
+                inline_keyboard = {
+                    "inline_keyboard": [[
+                        {"text": "🛒 Запустить витрину", "web_app": {"url": web_app_url}}
+                    ]]
+                }
+                send_message(chat_id, "Нажмите кнопку ниже, чтобы открыть витрину:", reply_markup=inline_keyboard)
+                return jsonify({"status": "ok"}), 200
+
             if text == "📊 Отчёты":
                 send_reports_menu(chat_id, point_key)
                 return jsonify({"status": "ok"}), 200
@@ -566,7 +631,7 @@ def webhook():
                     "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\nНапример: 01.09.26",
                     reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
                 return jsonify({"status": "ok"}), 200
-            if text == "📸 Обстановка на точке":
+            if text == "📸 Обстановка":
                 user_data[chat_id] = {"waiting_for": "point_photo"}
                 send_message(chat_id, "📸 Отправьте фото:",
                              reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
