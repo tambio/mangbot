@@ -1,5 +1,6 @@
 import os
 import logging
+import urllib.parse
 from flask import Flask, request, jsonify, send_file
 import requests
 from datetime import datetime, timedelta
@@ -103,25 +104,21 @@ def save_to_sheet(user_name, product, quantity, point_key):
         return False, 0
 
 # ========================
-# WEB APP (Витрина)
+# WEB APP API
 # ========================
 
 @app.route('/webapp')
 def webapp():
-    """Отдает HTML-файл мини-приложения"""
     return send_file('webapp.html')
 
 @app.route('/api/menu')
 def api_menu():
-    """Возвращает список товаров в JSON для мини-аппа"""
     point_key = request.args.get('point', 'point_1')
     items = get_menu(point_key)
-    result = [{"name": name, "price": price} for name, price in items]
-    return jsonify(result)
+    return jsonify([{"name": name, "price": price} for name, price in items])
 
 @app.route('/api/submit', methods=['POST'])
 def api_submit():
-    """Принимает корзину из мини-аппа и записывает в таблицу пачкой"""
     try:
         data = request.get_json()
         chat_id = data.get('chat_id')
@@ -141,24 +138,87 @@ def api_submit():
         for product_name, qty in cart.items():
             price = get_price(product_name, point_key)
             loss = price * qty
-            rows_to_insert.append([
-                date_str, time_str, user_name, product_name, str(qty), str(price), str(loss)
-            ])
+            rows_to_insert.append([date_str, time_str, user_name, product_name, str(qty), str(price), str(loss)])
 
-        # Записываем все строки разом
         sheet.append_rows(rows_to_insert)
-
-        # Отправляем сообщение в чат бота
-        if chat_id:
-            send_message(chat_id, f"✅ Успешно списано {len(rows_to_insert)} позиций через витрину!")
+        
+        # Уведомление в группу
+        group_id = POINTS[point_key].get("group_id")
+        if group_id:
+            text = f"📦 {user_name} списал(а):\n"
+            for p, q in cart.items():
+                text += f"• {p} — {q} шт\n"
+            send_message(group_id, text)
 
         return jsonify({"status": "ok"})
     except Exception as e:
         logging.error(f"Ошибка витрины: {e}")
         return jsonify({"status": "error", "message": str(e)})
 
+@app.route('/api/report', methods=['POST'])
+def api_report():
+    try:
+        data = request.get_json()
+        point_key = data.get('point_key')
+        report_type = data.get('type')
+        date_from = data.get('date_from')
+        date_to = data.get('date_to')
+
+        sheet = get_sheet("СПИСАНИЕ", point_key)
+        rows = sheet.get_all_values()
+        if len(rows) <= 1:
+            return jsonify({"status": "ok", "data": [], "total_loss": 0, "show_prices": report_type == 'sverka'})
+
+        stats = {}
+        total_loss = 0
+        now = datetime.now(TIMEZONE)
+
+        for row in rows[1:]:
+            if len(row) < 7: continue
+            try:
+                row_date = datetime.strptime(row[0], "%d.%m.%Y").date()
+                
+                if report_type == 'week':
+                    week_ago = now.date() - timedelta(days=7)
+                    if row_date < week_ago: continue
+                elif report_type == 'month':
+                    if row_date.year != now.year or row_date.month != now.month: continue
+                elif report_type in ['period', 'sverka']:
+                    d_from = datetime.strptime(date_from, "%d.%m.%y").date()
+                    d_to = datetime.strptime(date_to, "%d.%m.%y").date()
+                    if not (d_from <= row_date <= d_to): continue
+
+                product = row[3]
+                qty = float(row[4])
+                loss = float(row[6])
+                
+                stats.setdefault(product, {"qty": 0, "loss": 0})
+                stats[product]["qty"] += qty
+                stats[product]["loss"] += loss
+                total_loss += loss
+            except:
+                continue
+
+        result = []
+        for prod, d in stats.items():
+            result.append({"product": prod, "qty": d["qty"], "loss": d["loss"]})
+        
+        result.sort(key=lambda x: x["qty"], reverse=True)
+        show_prices = (report_type == 'sverka')
+        
+        return jsonify({
+            "status": "ok", 
+            "data": result, 
+            "total_loss": total_loss,
+            "show_prices": show_prices
+        })
+    except Exception as e:
+        logging.error(f"Ошибка API отчета: {e}")
+        return jsonify({"status": "error", "message": str(e)})
+
+
 # ========================
-# МЕНЮ
+# МЕНЮ БОТА (ТОЛЬКО MINI APP)
 # ========================
 
 def send_point_selection(chat_id):
@@ -171,105 +231,38 @@ def send_point_selection(chat_id):
     }
     send_message(chat_id, "🏪 ВЫБЕРИТЕ ТОЧКУ:", reply_markup=keyboard)
 
-def send_main_menu(chat_id, point_key):
-    items = get_menu(point_key)
-    keyboard = []
-    row = []
-    for name, price in items:
-        row.append(name)
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    
-    # ДОБАВЛЕНА КНОПКА ВИТРИНЫ
-    keyboard.append(["🛒 Открыть витрину (Mini App)"])
-    
-    keyboard.append(["📊 Отчёты", "📸 Обстановка"])
-    keyboard.append(["➕ Другое", "🏠 Главное меню"])
-    keyboard_obj = {"keyboard": keyboard, "resize_keyboard": True}
+def send_main_menu(chat_id, point_key, user_name="Гость"):
     point_name = POINTS[point_key]["name"]
-    send_message(chat_id, f"📍 Точка: {point_name}\n🍽 Выберите позицию или откройте витрину:", reply_markup=keyboard_obj)
-
-def send_reports_menu(chat_id, point_key):
-    keyboard = {"keyboard": [
-        ["📆 За текущую неделю"],
-        ["📅 За месяц"],
-        ["📊 За период"],
-        ["Сверка"],
-        ["🏠 Главное меню"]
-    ], "resize_keyboard": True}
-    send_message(chat_id, "📊 ВЫБЕРИТЕ ТИП ОТЧЁТА:", reply_markup=keyboard)
-
-def send_month_selection(chat_id):
-    months_kb = []
-    row = []
-    for i, month in enumerate(MONTHS):
-        row.append(month)
-        if len(row) == 3 or i == len(MONTHS) - 1:
-            months_kb.append(row.copy())
-            row = []
-    months_kb.append(["🏠 Главное меню"])
-    send_message(chat_id, "🗓 ВЫБЕРИТЕ МЕСЯЦ:", reply_markup={"keyboard": months_kb, "resize_keyboard": True})
-
-def send_week_selection(chat_id, month_name, year):
-    month_num = MONTHS.index(month_name) + 1
-    last_day = calendar.monthrange(year, month_num)[1]
-    weeks = []
-    ws = 1
-    while ws <= last_day:
-        we = min(ws + 6, last_day)
-        weeks.append((ws, we))
-        ws += 7
-    keyboard = []
-    for ws, we in weeks:
-        keyboard.append([f"{ws}-{we} {month_name}" if ws != we else f"{ws} {month_name}"])
-    keyboard.append(["Весь месяц", "🏠 Главное меню"])
-    send_message(chat_id, f"🗓 {month_name.upper()} {year} — выберите неделю:", reply_markup={"keyboard": keyboard, "resize_keyboard": True})
+    safe_point_name = urllib.parse.quote(point_name)
+    
+    # Ссылка на наш Mini App с параметрами
+    web_app_url = f"https://coffee-spisanie-bot.onrender.com/webapp?point={point_key}&user={user_name}&chat_id={chat_id}&point_name={safe_point_name}"
+    
+    # Инлайн-кнопка для запуска Mini App
+    inline_keyboard = {
+        "inline_keyboard": [[
+            {"text": f"🚀 Открыть Kontrol ({point_name})", "web_app": {"url": web_app_url}}
+        ]]
+    }
+    
+    # Клавиатура снизу (только для сброса)
+    reply_keyboard = {
+        "keyboard": [["🏠 Главное меню"]],
+        "resize_keyboard": True
+    }
+    
+    send_message(chat_id, f"📍 Точка: {point_name}\n\nНажмите кнопку ниже, чтобы открыть приложение Kontrol 👇", reply_markup=inline_keyboard)
+    send_message(chat_id, "Или используйте меню для возврата:", reply_markup=reply_keyboard)
 
 # ========================
-# ОТЧЁТЫ
-# ========================
-
-def send_weekly_report(chat_id, point_key):
-    report = build_week_report_text(point_key, hide_prices=True)
-    if report:
-        send_message(chat_id, report)
-    else:
-        send_message(chat_id, "📭 За неделю списаний нет")
-
-def send_monthly_report(chat_id, month_name, year, point_key, week_range=None):
-    report = build_month_by_name_text(point_key, month_name, year, week_range, hide_prices=True)
-    if report:
-        send_message(chat_id, report)
-    else:
-        send_message(chat_id, "📭 За указанный период списаний нет")
-
-def send_period_report(chat_id, point_key, date_from, date_to):
-    report = build_period_report_text(point_key, date_from, date_to, hide_prices=True)
-    if report:
-        send_message(chat_id, report)
-    else:
-        send_message(chat_id, "📭 За этот период списаний нет")
-
-def send_sverka_report(chat_id, point_key, date_from, date_to):
-    report = build_period_report_text(point_key, date_from, date_to, hide_prices=False)
-    if report:
-        send_message(chat_id, report)
-    else:
-        send_message(chat_id, "📭 За этот период списаний нет")
-
-# ========================
-# ФОРМИРОВАНИЕ ОТЧЁТОВ
+# ОТЧЁТЫ ДЛЯ ГРУПП И CRON
 # ========================
 
 def build_week_report_text(point_key, hide_prices=False):
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
-        if len(data) <= 1:
-            return None
+        if len(data) <= 1: return None
         week_ago = datetime.now(TIMEZONE) - timedelta(days=7)
         stats = {}
         for row in data[1:]:
@@ -283,17 +276,13 @@ def build_week_report_text(point_key, hide_prices=False):
                         stats.setdefault(product, {"qty": 0, "loss": 0})
                         stats[product]["qty"] += qty
                         stats[product]["loss"] += loss
-                except:
-                    continue
-        if not stats:
-            return None
+                except: continue
+        if not stats: return None
         point_name = POINTS[point_key]["name"]
         report = f"📊 ОТЧЁТ ЗА НЕДЕЛЮ ({point_name})\n\n"
         for product, d in stats.items():
-            if hide_prices:
-                report += f"{product}: {d['qty']:.0f} шт\n"
-            else:
-                report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+            if hide_prices: report += f"{product}: {d['qty']:.0f} шт\n"
+            else: report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
         return report
     except Exception as e:
         logging.error(f"Ошибка недельного отчёта: {e}")
@@ -303,8 +292,7 @@ def build_month_report_text(point_key, hide_prices=False):
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
-        if len(data) <= 1:
-            return None
+        if len(data) <= 1: return None
         now = datetime.now(TIMEZONE)
         stats = {}
         for row in data[1:]:
@@ -318,58 +306,14 @@ def build_month_report_text(point_key, hide_prices=False):
                         stats.setdefault(product, {"qty": 0, "loss": 0})
                         stats[product]["qty"] += qty
                         stats[product]["loss"] += loss
-                except:
-                    continue
-        if not stats:
-            return None
+                except: continue
+        if not stats: return None
         point_name = POINTS[point_key]["name"]
         month_name = MONTHS[now.month - 1]
         report = f"📊 ОТЧЁТ ЗА {month_name} {now.year} ({point_name})\n\n"
         for product, d in stats.items():
-            if hide_prices:
-                report += f"{product}: {d['qty']:.0f} шт\n"
-            else:
-                report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
-        return report
-    except Exception as e:
-        logging.error(f"Ошибка месячного отчёта: {e}")
-        return None
-
-def build_month_by_name_text(point_key, month_name, year, week_range=None, hide_prices=False):
-    try:
-        sheet = get_sheet("СПИСАНИЕ", point_key)
-        data = sheet.get_all_values()
-        if len(data) <= 1:
-            return None
-        month_num = MONTHS.index(month_name) + 1
-        stats = {}
-        for row in data[1:]:
-            if len(row) >= 7:
-                try:
-                    row_date = datetime.strptime(row[0], "%d.%m.%Y")
-                    if row_date.year == year and row_date.month == month_num:
-                        if week_range and not (week_range[0] <= row_date.day <= week_range[1]):
-                            continue
-                        product = row[3]
-                        qty = float(row[4])
-                        loss = float(row[6])
-                        stats.setdefault(product, {"qty": 0, "loss": 0})
-                        stats[product]["qty"] += qty
-                        stats[product]["loss"] += loss
-                except:
-                    continue
-        if not stats:
-            return None
-        point_name = POINTS[point_key]["name"]
-        if week_range:
-            report = f"📊 ОТЧЁТ ЗА {week_range[0]}-{week_range[1]} {month_name} ({point_name})\n\n"
-        else:
-            report = f"📊 ОТЧЁТ ЗА {month_name} {year} ({point_name})\n\n"
-        for product, d in stats.items():
-            if hide_prices:
-                report += f"{product}: {d['qty']:.0f} шт\n"
-            else:
-                report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+            if hide_prices: report += f"{product}: {d['qty']:.0f} шт\n"
+            else: report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
         return report
     except Exception as e:
         logging.error(f"Ошибка месячного отчёта: {e}")
@@ -379,8 +323,7 @@ def build_period_report_text(point_key, date_from, date_to, hide_prices=False):
     try:
         sheet = get_sheet("СПИСАНИЕ", point_key)
         data = sheet.get_all_values()
-        if len(data) <= 1:
-            return None
+        if len(data) <= 1: return None
         stats = {}
         total_loss = 0
         for row in data[1:]:
@@ -395,19 +338,14 @@ def build_period_report_text(point_key, date_from, date_to, hide_prices=False):
                         stats[product]["qty"] += qty
                         stats[product]["loss"] += loss
                         total_loss += loss
-                except:
-                    continue
-        if not stats:
-            return None
+                except: continue
+        if not stats: return None
         point_name = POINTS[point_key]["name"]
         report = f"📊 ОТЧЁТ ЗА {date_from.strftime('%d.%m.%y')} – {date_to.strftime('%d.%m.%y')} ({point_name})\n\n"
         for product, d in stats.items():
-            if hide_prices:
-                report += f"{product}: {d['qty']:.0f} шт\n"
-            else:
-                report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
-        if not hide_prices:
-            report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
+            if hide_prices: report += f"{product}: {d['qty']:.0f} шт\n"
+            else: report += f"{product}: {d['qty']} шт — {d['loss']:.0f} ₸\n"
+        if not hide_prices: report += f"\n💰 ИТОГО: {total_loss:.0f} ₸"
         return report
     except Exception as e:
         logging.error(f"Ошибка отчёта за период: {e}")
@@ -432,17 +370,12 @@ def cron_weekly():
     key = request.args.get("key", "")
     if not CRON_SECRET or key != CRON_SECRET:
         return jsonify({"status": "error", "message": "unauthorized"}), 403
-
     for point_key, pdata in POINTS.items():
         group_id = pdata.get("group_id")
-        if not group_id:
-            continue
+        if not group_id: continue
         report = build_week_report_text(point_key, hide_prices=True)
-        if report:
-            send_message(group_id, report)
-        else:
-            send_message(group_id, f"📭 За неделю списаний нет ({pdata['name']})")
-
+        if report: send_message(group_id, report)
+        else: send_message(group_id, f"📭 За неделю списаний нет ({pdata['name']})")
     return jsonify({"status": "ok"}), 200
 
 @app.route('/cron/monthly', methods=['GET'])
@@ -450,17 +383,12 @@ def cron_monthly():
     key = request.args.get("key", "")
     if not CRON_SECRET or key != CRON_SECRET:
         return jsonify({"status": "error", "message": "unauthorized"}), 403
-
     for point_key, pdata in POINTS.items():
         group_id = pdata.get("group_id")
-        if not group_id:
-            continue
+        if not group_id: continue
         report = build_month_report_text(point_key, hide_prices=True)
-        if report:
-            send_message(group_id, report)
-        else:
-            send_message(group_id, f"📭 За этот месяц списаний нет ({pdata['name']})")
-
+        if report: send_message(group_id, report)
+        else: send_message(group_id, f"📭 За этот месяц списаний нет ({pdata['name']})")
     return jsonify({"status": "ok"}), 200
 
 @app.route('/cron/remind', methods=['GET'])
@@ -468,27 +396,18 @@ def cron_remind():
     key = request.args.get("key", "")
     if not CRON_SECRET or key != CRON_SECRET:
         return jsonify({"status": "error", "message": "unauthorized"}), 403
-
     results = []
     for point_key, pdata in POINTS.items():
         group_id = pdata.get("group_id")
-        if not group_id:
-            continue
-
+        if not group_id: continue
         usernames = get_employees(point_key)
         if not usernames:
             results.append({"point": pdata["name"], "status": "no_employees"})
             continue
-
         tags = " ".join([f"@{u}" for u in usernames])
-        text = (
-            f"🔔 {tags}\n\n"
-            f"Напоминание: не забудь! внести списания за сегодня!\n"
-            f"📍 Точка: {pdata['name']}"
-        )
+        text = f"🔔 {tags}\n\nНапоминание: не забудь! внести списания за сегодня!\n📍 Точка: {pdata['name']}"
         send_message(group_id, text)
         results.append({"point": pdata["name"], "status": "sent", "count": len(usernames)})
-
     return jsonify({"status": "ok", "results": results}), 200
 
 # ========================
@@ -500,7 +419,6 @@ def webhook():
     try:
         update = request.get_json()
 
-        # CALLBACK QUERY (нажатия inline-кнопок в группе)
         if "callback_query" in update:
             cq = update["callback_query"]
             callback_id = cq["id"]
@@ -545,7 +463,6 @@ def webhook():
 
             return jsonify({"status": "ok"}), 200
 
-        # MESSAGE
         if "message" not in update:
             return jsonify({"status": "ok"}), 200
 
@@ -553,10 +470,9 @@ def webhook():
         chat_type = update["message"]["chat"]["type"]
         user_name = update["message"]["from"].get("first_name", "Гость")
 
-        # ЛИЧКА
+        # ЛИЧКА (ТОЛЬКО MINI APP)
         if chat_type == "private":
-
-            # ФОТО
+            # Обработка фото, если бариста отправит его боту (на будущее)
             if "photo" in update["message"]:
                 if chat_id in user_data and user_data[chat_id].get("waiting_for") == "point_photo":
                     try:
@@ -570,20 +486,17 @@ def webhook():
                         else:
                             send_message(chat_id, "❌ Ошибка отправки в группу")
                         del user_data[chat_id]
-                        send_main_menu(chat_id, point_key)
+                        send_main_menu(chat_id, point_key, user_name)
                     except Exception as e:
                         logging.error(f"Ошибка фото: {e}")
                         send_message(chat_id, "❌ Ошибка обработки фото")
-                else:
-                    send_message(chat_id, "❌ Сначала нажмите 📸 Обстановка на точке")
                 return jsonify({"status": "ok"}), 200
 
             text = update["message"].get("text", "").strip()
 
             if text == "/start" or text == "🏠 Главное меню":
                 user_points.pop(chat_id, None)
-                if chat_id in user_data:
-                    del user_data[chat_id]
+                if chat_id in user_data: del user_data[chat_id]
                 send_point_selection(chat_id)
                 return jsonify({"status": "ok"}), 200
 
@@ -591,172 +504,19 @@ def webhook():
                 if text == f"🏠 {pdata['name']}":
                     user_points[chat_id] = pk
                     send_message(chat_id, f"✅ Точка: {pdata['name']}")
-                    send_main_menu(chat_id, pk)
+                    send_main_menu(chat_id, pk, user_name)
                     return jsonify({"status": "ok"}), 200
 
             if chat_id not in user_points:
                 send_point_selection(chat_id)
                 return jsonify({"status": "ok"}), 200
+            
+            # Любое другое сообщение перекидывает на главное меню с Mini App
             point_key = user_points[chat_id]
-
-            # ОТКРЫТИЕ ВИТРИНЫ
-            if text == "🛒 Открыть витрину (Mini App)":
-                web_app_url = f"https://coffee-spisanie-bot.onrender.com/webapp?point={point_key}&user={user_name}&chat_id={chat_id}"
-                inline_keyboard = {
-                    "inline_keyboard": [[
-                        {"text": "🛒 Запустить витрину", "web_app": {"url": web_app_url}}
-                    ]]
-                }
-                send_message(chat_id, "Нажмите кнопку ниже, чтобы открыть витрину:", reply_markup=inline_keyboard)
-                return jsonify({"status": "ok"}), 200
-
-            if text == "📊 Отчёты":
-                send_reports_menu(chat_id, point_key)
-                return jsonify({"status": "ok"}), 200
-            if text == "📆 За текущую неделю":
-                send_weekly_report(chat_id, point_key)
-                return jsonify({"status": "ok"}), 200
-            if text == "📅 За месяц":
-                send_month_selection(chat_id)
-                return jsonify({"status": "ok"}), 200
-            if text == "📊 За период":
-                user_data[chat_id] = {"waiting_for": "period_start"}
-                send_message(chat_id,
-                    "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\nНапример: 01.09.26",
-                    reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                return jsonify({"status": "ok"}), 200
-            if text == "Сверка":
-                user_data[chat_id] = {"waiting_for": "sverka_start"}
-                send_message(chat_id,
-                    "📅 Введите дату НАЧАЛА в формате ДД.ММ.ГГ\n\nНапример: 01.09.26",
-                    reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                return jsonify({"status": "ok"}), 200
-            if text == "📸 Обстановка":
-                user_data[chat_id] = {"waiting_for": "point_photo"}
-                send_message(chat_id, "📸 Отправьте фото:",
-                             reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                return jsonify({"status": "ok"}), 200
-            if text == "➕ Другое":
-                user_data[chat_id] = {"waiting_for": "other_product"}
-                send_message(chat_id, "✏️ Напишите название позиции:",
-                             reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                return jsonify({"status": "ok"}), 200
-
-            # ВВОД ДАТЫ НАЧАЛА ПЕРИОДА
-            if chat_id in user_data and user_data[chat_id].get("waiting_for") == "period_start":
-                d = parse_short_date(text)
-                if not d:
-                    send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 01.09.26",
-                                 reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                    return jsonify({"status": "ok"}), 200
-                user_data[chat_id] = {"waiting_for": "period_end", "date_from": d}
-                send_message(chat_id, "📅 Введите дату КОНЦА в формате ДД.ММ.ГГ\n\nНапример: 15.09.26",
-                             reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                return jsonify({"status": "ok"}), 200
-
-            if chat_id in user_data and user_data[chat_id].get("waiting_for") == "period_end":
-                d_end = parse_short_date(text)
-                if not d_end:
-                    send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 15.09.26",
-                                 reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                    return jsonify({"status": "ok"}), 200
-                d_start = user_data[chat_id]["date_from"]
-                if d_end < d_start:
-                    send_message(chat_id, "❌ Дата конца раньше начала. Введите КОНЕЦ ещё раз:")
-                    return jsonify({"status": "ok"}), 200
-                send_period_report(chat_id, point_key, d_start, d_end)
-                del user_data[chat_id]
-                send_reports_menu(chat_id, point_key)
-                return jsonify({"status": "ok"}), 200
-
-            # ВВОД ДАТЫ ДЛЯ СВЕРКИ
-            if chat_id in user_data and user_data[chat_id].get("waiting_for") == "sverka_start":
-                d = parse_short_date(text)
-                if not d:
-                    send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 01.09.26",
-                                 reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                    return jsonify({"status": "ok"}), 200
-                user_data[chat_id] = {"waiting_for": "sverka_end", "date_from": d}
-                send_message(chat_id, "📅 Введите дату КОНЦА в формате ДД.ММ.ГГ\n\nНапример: 15.09.26",
-                             reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                return jsonify({"status": "ok"}), 200
-
-            if chat_id in user_data and user_data[chat_id].get("waiting_for") == "sverka_end":
-                d_end = parse_short_date(text)
-                if not d_end:
-                    send_message(chat_id, "❌ Неверный формат. Введите как ДД.ММ.ГГ\nНапример: 15.09.26",
-                                 reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                    return jsonify({"status": "ok"}), 200
-                d_start = user_data[chat_id]["date_from"]
-                if d_end < d_start:
-                    send_message(chat_id, "❌ Дата конца раньше начала. Введите КОНЕЦ ещё раз:")
-                    return jsonify({"status": "ok"}), 200
-                send_sverka_report(chat_id, point_key, d_start, d_end)
-                del user_data[chat_id]
-                send_reports_menu(chat_id, point_key)
-                return jsonify({"status": "ok"}), 200
-
-            # ВЫБОР МЕСЯЦА
-            if text in MONTHS:
-                current_year = datetime.now(TIMEZONE).year
-                user_data[chat_id] = {"waiting_for": "week_in_month", "month": text, "year": current_year}
-                send_week_selection(chat_id, text, current_year)
-                return jsonify({"status": "ok"}), 200
-
-            if chat_id in user_data and user_data[chat_id].get("waiting_for") == "week_in_month":
-                month = user_data[chat_id]["month"]
-                year = user_data[chat_id]["year"]
-                if text == "Весь месяц":
-                    send_monthly_report(chat_id, month, year, point_key)
-                elif " " in text and text.split(" ")[0].split("-")[0].isdigit():
-                    week_part = text.split(" ")[0]
-                    if "-" in week_part:
-                        start, end = map(int, week_part.split("-"))
-                        send_monthly_report(chat_id, month, year, point_key, (start, end))
-                    else:
-                        d = int(week_part)
-                        send_monthly_report(chat_id, month, year, point_key, (d, d))
-                del user_data[chat_id]
-                send_reports_menu(chat_id, point_key)
-                return jsonify({"status": "ok"}), 200
-
-            # ВВОД КОЛИЧЕСТВА
-            if chat_id in user_data and user_data[chat_id].get("waiting_for") in ["quantity", "quantity_other"]:
-                try:
-                    quantity = float(text.replace(",", "."))
-                    product = user_data[chat_id]["product"]
-                    success, loss = save_to_sheet(user_name, product, quantity, point_key)
-                    if success:
-                        send_message(chat_id, f"✅ Списано: {product} — {quantity} шт")
-                    else:
-                        send_message(chat_id, "❌ Ошибка сохранения")
-                    del user_data[chat_id]
-                    send_main_menu(chat_id, point_key)
-                except ValueError:
-                    send_message(chat_id, "❌ Введите число:")
-                return jsonify({"status": "ok"}), 200
-
-            if chat_id in user_data and user_data[chat_id].get("waiting_for") == "other_product":
-                product = text
-                user_data[chat_id] = {"waiting_for": "quantity_other", "product": product}
-                send_message(chat_id, f"📝 Введите количество для {product}:",
-                             reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                return jsonify({"status": "ok"}), 200
-
-            # НАЖАТИЕ НА ПОЗИЦИЮ
-            items = get_menu(point_key)
-            for name, price in items:
-                if text == name:
-                    user_data[chat_id] = {"waiting_for": "quantity", "product": name}
-                    send_message(chat_id, f"📝 Введите количество для {name}:",
-                                 reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
-                    return jsonify({"status": "ok"}), 200
-
-            send_message(chat_id, "❌ Используйте кнопки меню",
-                         reply_markup={"keyboard": [["🏠 Главное меню"]], "resize_keyboard": True})
+            send_main_menu(chat_id, point_key, user_name)
             return jsonify({"status": "ok"}), 200
 
-        # ГРУППА (только команды, БЕЗ ЦЕН)
+        # ГРУППА (оставляем только команды, без цен)
         group_key = str(chat_id)
         if group_key not in GROUP_TO_POINT:
             return jsonify({"status": "ok"}), 200
@@ -766,7 +526,6 @@ def webhook():
 
         if chat_id in user_data:
             state = user_data[chat_id]
-
             if state.get("waiting_for") == "group_period_start":
                 d = parse_short_date(text)
                 if not d:
@@ -789,7 +548,6 @@ def webhook():
                 send_message(chat_id, report if report else "📭 За этот период списаний нет")
                 del user_data[chat_id]
                 return jsonify({"status": "ok"}), 200
-
             return jsonify({"status": "ok"}), 200
 
         if not text.startswith("/"):

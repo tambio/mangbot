@@ -3,29 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Витрина списаний</title>
+    <title>Kontrol</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root {
-            --bg-color: var(--tg-theme-bg-color, #ffffff);
-            --text-color: var(--tg-theme-text-color, #000000);
-            --hint-color: var(--tg-theme-hint-color, #999999);
-            --button-color: var(--tg-theme-button-color, #3390ec);
-            --button-text-color: var(--tg-theme-button-text-color, #ffffff);
-            --secondary-bg: var(--tg-theme-secondary-bg-color, #f4f4f5);
+            --bg: var(--tg-theme-bg-color, #ffffff);
+            --text: var(--tg-theme-text-color, #000000);
+            --hint: var(--tg-theme-hint-color, #999999);
+            --btn: var(--tg-theme-button-color, #3390ec);
+            --btn-text: var(--tg-theme-button-text-color, #ffffff);
+            --sec-bg: var(--tg-theme-secondary-bg-color, #f4f4f5);
         }
 
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
             margin: 0;
             padding: 16px;
-            padding-bottom: 100px;
+            padding-bottom: 80px; /* место под таб-бар */
         }
 
-        h2 { margin-top: 0; font-size: 20px; }
+        h2 { margin-top: 0; font-size: 22px; font-weight: 700; }
+        .header { margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+        .header span { font-size: 24px; }
 
+        /* --- ВКЛАДКА ВИТРИНА --- */
         .grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -33,116 +38,150 @@
         }
 
         .card {
-            background-color: var(--secondary-bg);
-            border-radius: 12px;
+            background: var(--sec-bg);
+            border-radius: 14px;
             padding: 12px;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
-            min-height: 90px;
+            min-height: 100px;
+            transition: transform 0.1s;
         }
+        .card:active { transform: scale(0.98); }
 
-        .card-title {
-            font-size: 14px;
-            font-weight: 500;
-            margin-bottom: 8px;
-            line-height: 1.2;
-        }
-
-        .card-price {
-            font-size: 12px;
-            color: var(--hint-color);
-            margin-bottom: 8px;
-        }
-
-        .card-controls {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
+        .card-title { font-size: 14px; font-weight: 500; line-height: 1.3; }
+        .card-price { font-size: 12px; color: var(--hint); margin-top: 4px; }
+        
+        .controls { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+        
         .btn-add {
-            background-color: var(--button-color);
-            color: var(--button-text-color);
-            border: none;
-            border-radius: 8px;
-            width: 32px;
-            height: 32px;
-            font-size: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
+            background: var(--btn); color: var(--btn-text);
+            border: none; border-radius: 10px;
+            width: 36px; height: 36px; font-size: 22px;
+            display: flex; align-items: center; justify-content: center;
         }
 
-        .qty-control {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-weight: bold;
-        }
-
+        .qty-control { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 16px; }
         .qty-btn {
-            background: none;
-            border: 1px solid var(--hint-color);
-            color: var(--text-color);
-            border-radius: 6px;
-            width: 24px;
-            height: 24px;
-            font-size: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
+            background: rgba(0,0,0,0.05); border: none; color: var(--text);
+            border-radius: 8px; width: 32px; height: 32px; font-size: 20px;
+            display: flex; align-items: center; justify-content: center;
         }
 
-        .bottom-bar {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background-color: var(--bg-color);
-            padding: 16px;
-            border-top: 1px solid var(--secondary-bg);
-            box-shadow: 0 -4px 12px rgba(0,0,0,0.05);
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
+        /* --- ВКЛАДКА ОТЧЕТЫ --- */
+        .report-controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+        .date-inputs { display: none; gap: 10px; margin-bottom: 10px; }
+        .date-inputs.active { display: flex; }
+        
+        input[type="date"] {
+            flex: 1; padding: 12px; border-radius: 10px; border: 1px solid var(--hint);
+            background: var(--sec-bg); color: var(--text); font-size: 14px;
         }
 
-        .summary {
+        .btn-action {
+            background: var(--sec-bg); color: var(--text);
+            border: none; border-radius: 12px; padding: 14px;
+            font-size: 16px; font-weight: 600; text-align: left;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .btn-action::after { content: '›'; font-size: 20px; color: var(--hint); }
+        .btn-primary { background: var(--btn); color: var(--btn-text); justify-content: center; }
+        .btn-primary::after { display: none; }
+
+        .report-result {
+            background: var(--sec-bg); border-radius: 14px; padding: 16px;
+            margin-top: 20px; display: none;
+        }
+        .report-result.active { display: block; }
+        
+        .report-item {
+            display: flex; justify-content: space-between;
+            padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.05);
             font-size: 14px;
-            color: var(--hint-color);
-            text-align: center;
+        }
+        .report-item:last-child { border-bottom: none; }
+        .report-item .name { flex: 1; }
+        .report-item .qty { font-weight: 600; margin-left: 10px; }
+        .report-item .price { color: var(--hint); width: 70px; text-align: right; margin-left: 10px; }
+        
+        .report-total {
+            margin-top: 16px; padding-top: 16px;
+            border-top: 2px dashed var(--hint);
+            font-weight: 700; font-size: 16px;
+            display: flex; justify-content: space-between;
+        }
+
+        /* --- НИЖНЕЕ МЕНЮ --- */
+        .bottom-bar {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            background: var(--bg); border-top: 1px solid var(--sec-bg);
+            padding: 12px 16px; display: flex; justify-content: space-between; gap: 10px;
+            box-shadow: 0 -4px 15px rgba(0,0,0,0.05); z-index: 10;
         }
 
         .btn-submit {
-            background-color: var(--button-color);
-            color: var(--button-text-color);
-            border: none;
-            border-radius: 12px;
-            padding: 16px;
-            font-size: 16px;
-            font-weight: 600;
-            width: 100%;
-            cursor: pointer;
+            background: var(--btn); color: var(--btn-text);
+            border: none; border-radius: 12px; padding: 16px;
+            font-size: 16px; font-weight: 700; flex: 1;
         }
+        .btn-submit:disabled { opacity: 0.5; }
 
-        .btn-submit:disabled {
-            opacity: 0.5;
-        }
+        /* Табы */
+        .tabs { display: flex; background: var(--sec-bg); border-radius: 12px; padding: 4px; margin-bottom: 20px; }
+        .tab { flex: 1; text-align: center; padding: 10px; border-radius: 8px; font-weight: 600; font-size: 14px; color: var(--hint); }
+        .tab.active { background: var(--bg); color: var(--text); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
     </style>
 </head>
 <body>
 
-    <h2>🍽 Что списываем?</h2>
-    <div class="grid" id="menu-grid">
-        <!-- Сюда будут вставляться карточки -->
+    <div class="header">
+        <span>☕</span>
+        <h2 id="point-title">Kontrol</h2>
     </div>
 
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('shop')">Витрина</div>
+        <div class="tab" onclick="switchTab('reports')">Отчёты</div>
+    </div>
+
+    <!-- ВКЛАДКА ВИТРИНА -->
+    <div id="tab-shop">
+        <div class="grid" id="menu-grid"></div>
+    </div>
+
+    <!-- ВКЛАДКА ОТЧЕТЫ -->
+    <div id="tab-reports" style="display: none;">
+        <div class="report-controls">
+            <button class="btn-action" onclick="getReport('week')">За последние 7 дней</button>
+            <button class="btn-action" onclick="getReport('month')">За этот месяц</button>
+            <button class="btn-action" onclick="toggleCustomPeriod()">Свой период</button>
+            
+            <div class="date-inputs" id="date-inputs">
+                <input type="date" id="date-from">
+                <input type="date" id="date-to">
+            </div>
+            <button class="btn-action btn-primary" id="btn-period-submit" style="display: none;" onclick="getCustomReport('period')">Показать</button>
+            <button class="btn-action btn-primary" id="btn-sverka-submit" style="display: none; background: #f39c12;" onclick="getCustomReport('sverka')">Сверка (с ценами)</button>
+        </div>
+
+        <div class="report-result" id="report-result">
+            <div id="report-list"></div>
+            <div class="report-total" id="report-total" style="display: none;">
+                <span>ИТОГО:</span>
+                <span id="total-sum">0 ₸</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- НИЖНЯЯ ПАНЕЛЬ -->
     <div class="bottom-bar">
-        <div class="summary" id="summary-text">Ничего не выбрано</div>
-        <button class="btn-submit" id="submit-btn" disabled onclick="submitData()">✅ Списать</button>
+        <div id="shop-bottom" style="display: flex; width: 100%; gap: 10px;">
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; font-weight: bold;" id="summary-text">Ничего не выбрано</div>
+            <button class="btn-submit" id="submit-btn" disabled onclick="submitData()">✅ Списать</button>
+        </div>
+        <div id="reports-bottom" style="display: none; width: 100%;">
+            <!-- Место для кнопок отчетов, если нужно -->
+        </div>
     </div>
 
     <script>
@@ -154,10 +193,33 @@
         const pointKey = urlParams.get('point') || 'point_1';
         const userName = urlParams.get('user') || 'Гость';
         const chatId = urlParams.get('chat_id') || '';
+        const pointName = urlParams.get('point_name') || 'Kontrol';
+
+        // Устанавливаем название точки в заголовок
+        document.getElementById('point-title').innerText = pointName;
 
         let menuItems = [];
         let cart = {};
 
+        // ================= ТАБЫ =================
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+
+            if (tab === 'shop') {
+                document.getElementById('tab-shop').style.display = 'block';
+                document.getElementById('tab-reports').style.display = 'none';
+                document.getElementById('shop-bottom').style.display = 'flex';
+                document.getElementById('reports-bottom').style.display = 'none';
+            } else {
+                document.getElementById('tab-shop').style.display = 'none';
+                document.getElementById('tab-reports').style.display = 'block';
+                document.getElementById('shop-bottom').style.display = 'none';
+                document.getElementById('reports-bottom').style.display = 'block';
+            }
+        }
+
+        // ================= ВИТРИНА =================
         fetch(`/api/menu?point=${pointKey}`)
             .then(res => res.json())
             .then(data => {
@@ -166,40 +228,30 @@
             })
             .catch(err => {
                 tg.showAlert("Ошибка загрузки меню");
-                console.error(err);
             });
 
         function renderMenu() {
             const grid = document.getElementById('menu-grid');
             grid.innerHTML = '';
-
             menuItems.forEach(item => {
                 const qty = cart[item.name] || 0;
-                
                 const card = document.createElement('div');
                 card.className = 'card';
                 
-                let controlsHtml = '';
-                if (qty === 0) {
-                    controlsHtml = `<button class="btn-add" onclick="changeQty('${item.name}', 1)">+</button>`;
-                } else {
-                    controlsHtml = `
-                        <div class="qty-control">
-                            <button class="qty-btn" onclick="changeQty('${item.name}', -1)">-</button>
-                            <span>${qty}</span>
-                            <button class="qty-btn" onclick="changeQty('${item.name}', 1)">+</button>
-                        </div>
-                    `;
-                }
+                let controlsHtml = qty === 0 
+                    ? `<button class="btn-add" onclick="changeQty('${item.name}', 1)">+</button>`
+                    : `<div class="qty-control">
+                        <button class="qty-btn" onclick="changeQty('${item.name}', -1)">-</button>
+                        <span>${qty}</span>
+                        <button class="qty-btn" onclick="changeQty('${item.name}', 1)">+</button>
+                       </div>`;
 
                 card.innerHTML = `
                     <div>
                         <div class="card-title">${item.name}</div>
                         <div class="card-price">${item.price} ₸</div>
                     </div>
-                    <div class="card-controls">
-                        ${controlsHtml}
-                    </div>
+                    <div class="controls">${controlsHtml}</div>
                 `;
                 grid.appendChild(card);
             });
@@ -207,15 +259,8 @@
 
         function changeQty(name, delta) {
             tg.HapticFeedback.impactOccurred('light');
-            let current = cart[name] || 0;
-            let newQty = current + delta;
-            
-            if (newQty <= 0) {
-                delete cart[name];
-            } else {
-                cart[name] = newQty;
-            }
-            
+            let newQty = (cart[name] || 0) + delta;
+            if (newQty <= 0) delete cart[name]; else cart[name] = newQty;
             updateSummary();
             renderMenu();
         }
@@ -224,50 +269,130 @@
             const totalItems = Object.values(cart).reduce((a, b) => a + b, 0);
             const summaryText = document.getElementById('summary-text');
             const submitBtn = document.getElementById('submit-btn');
-
             if (totalItems === 0) {
                 summaryText.innerText = "Ничего не выбрано";
                 submitBtn.disabled = true;
             } else {
-                summaryText.innerText = `Выбрано позиций: ${totalItems}`;
+                summaryText.innerText = `Выбрано: ${totalItems}`;
                 submitBtn.disabled = false;
             }
         }
 
         function submitData() {
-            const submitBtn = document.getElementById('submit-btn');
-            submitBtn.innerText = "Отправка...";
-            submitBtn.disabled = true;
-
-            const payload = {
-                chat_id: chatId,
-                user_name: userName,
-                point_key: pointKey,
-                cart: cart
-            };
+            const btn = document.getElementById('submit-btn');
+            btn.innerText = "Отправка...";
+            btn.disabled = true;
 
             fetch('/api/submit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({ chat_id: chatId, user_name: userName, point_key: pointKey, cart: cart })
             })
             .then(res => res.json())
             .then(data => {
                 if (data.status === 'ok') {
-                    tg.showAlert("Успешно списано!", () => {
-                        tg.close();
-                    });
+                    tg.showAlert("Успешно списано!", () => { cart = {}; updateSummary(); renderMenu(); });
                 } else {
                     tg.showAlert("Ошибка: " + data.message);
-                    submitBtn.innerText = "✅ Списать";
-                    submitBtn.disabled = false;
+                    btn.innerText = "✅ Списать";
+                    btn.disabled = false;
                 }
             })
             .catch(err => {
                 tg.showAlert("Ошибка сети");
-                submitBtn.innerText = "✅ Списать";
-                submitBtn.disabled = false;
+                btn.innerText = "✅ Списать";
+                btn.disabled = false;
             });
+        }
+
+        // ================= ОТЧЕТЫ =================
+        function toggleCustomPeriod() {
+            const inputs = document.getElementById('date-inputs');
+            const btnPeriod = document.getElementById('btn-period-submit');
+            const btnSverka = document.getElementById('btn-sverka-submit');
+            
+            if (inputs.classList.contains('active')) {
+                inputs.classList.remove('active');
+                btnPeriod.style.display = 'none';
+                btnSverka.style.display = 'none';
+            } else {
+                inputs.classList.add('active');
+                btnPeriod.style.display = 'block';
+                btnSverka.style.display = 'block';
+            }
+        }
+
+        function getReport(type) {
+            tg.showAlert("Загрузка..."); // Визуальный фидбек
+            fetch('/api/report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ point_key: pointKey, type: type })
+            })
+            .then(res => res.json())
+            .then(data => renderReport(data))
+            .catch(err => tg.showAlert("Ошибка загрузки"));
+        }
+
+        function getCustomReport(type) {
+            const df = document.getElementById('date-from').value;
+            const dt = document.getElementById('date-to').value;
+            if (!df || !dt) return tg.showAlert("Выберите даты!");
+
+            // Переводим YYYY-MM-DD из инпута в ДД.ММ.ГГ для бэкенда
+            const formatDate = (iso) => {
+                const [y, m, d] = iso.split('-');
+                return `${d}.${m}.${y.slice(2)}`;
+            };
+
+            fetch('/api/report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    point_key: pointKey, 
+                    type: type, 
+                    date_from: formatDate(df), 
+                    date_to: formatDate(dt) 
+                })
+            })
+            .then(res => res.json())
+            .then(data => renderReport(data))
+            .catch(err => tg.showAlert("Ошибка загрузки"));
+        }
+
+        function renderReport(data) {
+            const container = document.getElementById('report-result');
+            const list = document.getElementById('report-list');
+            const totalDiv = document.getElementById('report-total');
+
+            list.innerHTML = '';
+            container.classList.add('active');
+
+            if (data.data.length === 0) {
+                list.innerHTML = '<div style="text-align:center; color:var(--hint);">Нет данных за этот период</div>';
+                totalDiv.style.display = 'none';
+                return;
+            }
+
+            data.data.forEach(item => {
+                const row = document.createElement('div');
+                row.className = 'report-item';
+                
+                let html = `<div class="name">${item.product}</div><div class="qty">${item.qty} шт</div>`;
+                if (data.show_prices) {
+                    html += `<div class="price">${item.loss} ₸</div>`;
+                }
+                
+                row.innerHTML = html;
+                list.appendChild(row);
+            });
+
+            if (data.show_prices && data.total_loss > 0) {
+                totalDiv.style.display = 'flex';
+                document.getElementById('total-sum').innerText = data.total_loss + ' ₸';
+            } else {
+                totalDiv.style.display = 'none';
+            }
         }
     </script>
 </body>
