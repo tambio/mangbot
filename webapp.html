@@ -3,15 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Kontrol</title>
+    <title>GLOBAL COFFEE</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root {
             --bg: var(--tg-theme-bg-color, #ffffff);
             --text: var(--tg-theme-text-color, #000000);
             --hint: var(--tg-theme-hint-color, #999999);
-            --btn: var(--tg-theme-button-color, #b82222);
-            --btn-text: var(--tg-theme-button-text-color, #ffffff);
+            /* ЖЕСТКО ЗАДАЕМ КРАСНЫЙ ЦВЕТ ДЛЯ КНОПОК */
+            --btn: #b02020; 
+            --btn-text: #ffffff;
             --sec-bg: var(--tg-theme-secondary-bg-color, #f4f4f5);
         }
 
@@ -23,12 +24,36 @@
             color: var(--text);
             margin: 0;
             padding: 16px;
-            padding-bottom: 80px; /* место под таб-бар */
+            padding-bottom: 80px;
         }
 
-        h2 { margin-top: 0; font-size: 22px; font-weight: 700; }
-        .header { margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
-        .header span { font-size: 24px; }
+        /* --- ШАПКА --- */
+        .header {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 24px;
+            text-align: center;
+        }
+
+        .logo-text {
+            font-size: 22px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--text);
+            margin-bottom: 4px;
+        }
+
+        .point-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--hint);
+            background: var(--sec-bg);
+            padding: 4px 12px;
+            border-radius: 20px;
+        }
 
         /*ВИТРИНА*/
         .grid {
@@ -59,6 +84,7 @@
             border: none; border-radius: 10px;
             width: 36px; height: 36px; font-size: 22px;
             display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
         }
 
         .qty-control { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 16px; }
@@ -66,6 +92,7 @@
             background: rgba(0,0,0,0.05); border: none; color: var(--text);
             border-radius: 8px; width: 32px; height: 32px; font-size: 20px;
             display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
         }
 
         /* ВКЛАДКА ОТЧЕТЫ*/
@@ -83,6 +110,7 @@
             border: none; border-radius: 12px; padding: 14px;
             font-size: 16px; font-weight: 600; text-align: left;
             display: flex; justify-content: space-between; align-items: center;
+            cursor: pointer;
         }
         .btn-action::after { content: '›'; font-size: 20px; color: var(--hint); }
         .btn-primary { background: var(--btn); color: var(--btn-text); justify-content: center; }
@@ -123,26 +151,27 @@
             background: var(--btn); color: var(--btn-text);
             border: none; border-radius: 12px; padding: 16px;
             font-size: 16px; font-weight: 700; flex: 1;
+            cursor: pointer;
         }
         .btn-submit:disabled { opacity: 0.5; }
 
         /* Табы */
         .tabs { display: flex; background: var(--sec-bg); border-radius: 12px; padding: 4px; margin-bottom: 20px; }
-        .tab { flex: 1; text-align: center; padding: 10px; border-radius: 8px; font-weight: 600; font-size: 14px; color: var(--hint); }
+        .tab { flex: 1; text-align: center; padding: 10px; border-radius: 8px; font-weight: 600; font-size: 14px; color: var(--hint); cursor: pointer; }
         .tab.active { background: var(--bg); color: var(--text); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
     </style>
 </head>
 <body>
 
+    <!-- Обновленная шапка -->
     <div class="header">
-        <span>☕</span>
-        <h2 id="point-title">Kontrol.</h2>
-        <h3 id="point-title">GLOBAL COFFEE</h3>
+        <div class="logo-text">GLOBAL COFFEE</div>
+        <div class="point-name" id="point-title">Загрузка...</div>
     </div>
 
     <div class="tabs">
-        <div class="tab active" onclick="switchTab('shop')">Позиции</div>
-        <div class="tab" onclick="switchTab('reports')">Отчёты</div>
+        <div class="tab active" onclick="switchTab('shop', event)">Позиции</div>
+        <div class="tab" onclick="switchTab('reports', event)">Отчёты</div>
     </div>
 
     <!-- ВКЛАДКА ВИТРИНА -->
@@ -180,9 +209,7 @@
             <div style="flex: 1; display: flex; align-items: center; justify-content: center; font-weight: bold;" id="summary-text">Ничего не выбрано</div>
             <button class="btn-submit" id="submit-btn" disabled onclick="submitData()">✅ Списать</button>
         </div>
-        <div id="reports-bottom" style="display: none; width: 100%;">
-            <!-- Место для кнопок отчетов, если нужно -->
-        </div>
+        <div id="reports-bottom" style="display: none; width: 100%;"></div>
     </div>
 
     <script>
@@ -194,18 +221,19 @@
         const pointKey = urlParams.get('point') || 'point_1';
         const userName = urlParams.get('user') || 'Гость';
         const chatId = urlParams.get('chat_id') || '';
-        const pointName = urlParams.get('point_name') || 'Kontrol';
+        const pointName = urlParams.get('point_name') || 'Точка';
 
-        // указатаель точки в заголовке
-        document.getElementById('point-title').innerText = pointName;
+        // Подставляем только название точки
+        document.getElementById('point-title').innerText = '📍 ' + pointName;
 
         let menuItems = [];
         let cart = {};
 
         // ================= ТАБЫ =================
-        function switchTab(tab) {
+        // Передаем event, чтобы правильно красить активный таб
+        function switchTab(tab, ev) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
+            ev.target.classList.add('active');
 
             if (tab === 'shop') {
                 document.getElementById('tab-shop').style.display = 'block';
@@ -324,7 +352,6 @@
         }
 
         function getReport(type) {
-            //tg.showAlert("Загрузка..."); // Визуальный фидбек
             fetch('/api/report', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -340,7 +367,6 @@
             const dt = document.getElementById('date-to').value;
             if (!df || !dt) return tg.showAlert("Выберите даты!");
 
-            // перевод YYYY-MM-DD в ДД.ММ.ГГ для бекаа
             const formatDate = (iso) => {
                 const [y, m, d] = iso.split('-');
                 return `${d}.${m}.${y.slice(2)}`;
