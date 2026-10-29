@@ -140,21 +140,22 @@ def api_submit():
             loss = price * qty
             rows_to_insert.append([date_str, time_str, user_name, product_name, str(qty), str(price), str(loss)])
 
+        # Записываем данные в таблицу 
         sheet.append_rows(rows_to_insert)
         
-        # Уведомление в группу
-        group_id = POINTS[point_key].get("group_id")
-        if group_id:
-            text = f"📦 {user_name} списал(а):\n"
-            for p, q in cart.items():
-                text += f"• {p} — {q} шт\n"
-            send_message(group_id, text)
+        # уведомления в группу
+        # group_id = POINTS[point_key].get("group_id")
+        # if group_id:
+        #     text = f"📦 {user_name} списал(а):\n"
+        #     for p, q in cart.items():
+        #         text += f"• {p} — {q} шт\n"
+        #     send_message(group_id, text)
 
         return jsonify({"status": "ok"})
     except Exception as e:
         logging.error(f"Ошибка витрины: {e}")
         return jsonify({"status": "error", "message": str(e)})
-
+    
 @app.route('/api/report', methods=['POST'])
 def api_report():
     try:
@@ -216,10 +217,7 @@ def api_report():
         logging.error(f"Ошибка API отчета: {e}")
         return jsonify({"status": "error", "message": str(e)})
 
-
-# ========================
-# МЕНЮ БОТА (ТОЛЬКО MINI APP)
-# ========================
+# МЕНЮ БОТА  MINI APP)
 
 def send_point_selection(chat_id):
     keyboard = {
@@ -235,17 +233,17 @@ def send_main_menu(chat_id, point_key, user_name="Гость"):
     point_name = POINTS[point_key]["name"]
     safe_point_name = urllib.parse.quote(point_name)
     
-    # Ссылка на наш Mini App с параметрами
+    # линк на мини апп
     web_app_url = f"https://coffee-spisanie-bot.onrender.com/webapp?point={point_key}&user={user_name}&chat_id={chat_id}&point_name={safe_point_name}"
     
-    # Инлайн-кнопка для запуска Mini App
+    # инлайн на миниапп
     inline_keyboard = {
         "inline_keyboard": [[
             {"text": f"🚀 Открыть Kontrol ({point_name})", "web_app": {"url": web_app_url}}
         ]]
     }
     
-    # Клавиатура снизу (только для сброса)
+    # спрос для точки
     reply_keyboard = {
         "keyboard": [["🏠 Главное меню"]],
         "resize_keyboard": True
@@ -254,9 +252,7 @@ def send_main_menu(chat_id, point_key, user_name="Гость"):
     send_message(chat_id, f"📍 Точка: {point_name}\n\nНажмите кнопку ниже, чтобы открыть приложение Kontrol 👇", reply_markup=inline_keyboard)
     send_message(chat_id, "Или используйте меню для возврата:", reply_markup=reply_keyboard)
 
-# ========================
-# ОТЧЁТЫ ДЛЯ ГРУПП И CRON
-# ========================
+# отчеты и крон 
 
 def build_week_report_text(point_key, hide_prices=False):
     try:
@@ -354,9 +350,9 @@ def build_period_report_text(point_key, date_from, date_to, hide_prices=False):
 def send_group_help(chat_id):
     help_text = (
         "Доступные команды:\n\n"
-        "📊 /report — отчёт за 7 дней\n"
-        "📅 /month — отчёт за текущий месяц\n"
-        "📈 /period — отчёт за произвольный период\n"
+        "📊 /report — отчёт за неделю\n"
+        "📅 /month — отчёт за месяц\n"
+        "📈 /period — отчёт за выбранный период\n"
         "❓ /help — эта справка"
     )
     send_message(chat_id, help_text)
@@ -410,9 +406,7 @@ def cron_remind():
         results.append({"point": pdata["name"], "status": "sent", "count": len(usernames)})
     return jsonify({"status": "ok", "results": results}), 200
 
-# ========================
 # WEBHOOK
-# ========================
 
 @app.route(f'/webhook/{TELEGRAM_TOKEN}', methods=['POST'])
 def webhook():
@@ -470,9 +464,9 @@ def webhook():
         chat_type = update["message"]["chat"]["type"]
         user_name = update["message"]["from"].get("first_name", "Гость")
 
-        # ЛИЧКА (ТОЛЬКО MINI APP)
+        # ЛИЧКА миниапп
         if chat_type == "private":
-            # Обработка фото, если бариста отправит его боту (на будущее)
+            # обработка фото НАДО ДОБАВИТЬ В МИНИАПП
             if "photo" in update["message"]:
                 if chat_id in user_data and user_data[chat_id].get("waiting_for") == "point_photo":
                     try:
@@ -511,12 +505,11 @@ def webhook():
                 send_point_selection(chat_id)
                 return jsonify({"status": "ok"}), 200
             
-            # Любое другое сообщение перекидывает на главное меню с Mini App
+            # любое другое перекидка
             point_key = user_points[chat_id]
             send_main_menu(chat_id, point_key, user_name)
             return jsonify({"status": "ok"}), 200
 
-        # ГРУППА (оставляем только команды, без цен)
         group_key = str(chat_id)
         if group_key not in GROUP_TO_POINT:
             return jsonify({"status": "ok"}), 200

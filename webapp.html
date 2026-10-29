@@ -10,7 +10,7 @@
             --bg: var(--tg-theme-bg-color, #ffffff);
             --text: var(--tg-theme-text-color, #000000);
             --hint: var(--tg-theme-hint-color, #999999);
-            --btn: var(--tg-theme-button-color, #3390ec);
+            --btn: var(--tg-theme-button-color, #b82222);
             --btn-text: var(--tg-theme-button-text-color, #ffffff);
             --sec-bg: var(--tg-theme-secondary-bg-color, #f4f4f5);
         }
@@ -30,7 +30,7 @@
         .header { margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
         .header span { font-size: 24px; }
 
-        /* --- ВКЛАДКА ВИТРИНА --- */
+        /*ВИТРИНА*/
         .grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -68,7 +68,7 @@
             display: flex; align-items: center; justify-content: center;
         }
 
-        /* --- ВКЛАДКА ОТЧЕТЫ --- */
+        /* ВКЛАДКА ОТЧЕТЫ*/
         .report-controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
         .date-inputs { display: none; gap: 10px; margin-bottom: 10px; }
         .date-inputs.active { display: flex; }
@@ -111,7 +111,7 @@
             display: flex; justify-content: space-between;
         }
 
-        /* --- НИЖНЕЕ МЕНЮ --- */
+        /*НИЖНЕЕ МЕНЮ*/
         .bottom-bar {
             position: fixed; bottom: 0; left: 0; right: 0;
             background: var(--bg); border-top: 1px solid var(--sec-bg);
@@ -136,11 +136,12 @@
 
     <div class="header">
         <span>☕</span>
-        <h2 id="point-title">Kontrol</h2>
+        <h2 id="point-title">Kontrol.</h2>
+        <h3 id="point-title">GLOBAL COFFEE</h3>
     </div>
 
     <div class="tabs">
-        <div class="tab active" onclick="switchTab('shop')">Витрина</div>
+        <div class="tab active" onclick="switchTab('shop')">Позиции</div>
         <div class="tab" onclick="switchTab('reports')">Отчёты</div>
     </div>
 
@@ -195,7 +196,7 @@
         const chatId = urlParams.get('chat_id') || '';
         const pointName = urlParams.get('point_name') || 'Kontrol';
 
-        // Устанавливаем название точки в заголовок
+        // указатаель точки в заголовке
         document.getElementById('point-title').innerText = pointName;
 
         let menuItems = [];
@@ -323,7 +324,7 @@
         }
 
         function getReport(type) {
-            tg.showAlert("Загрузка..."); // Визуальный фидбек
+            //tg.showAlert("Загрузка..."); // Визуальный фидбек
             fetch('/api/report', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -339,7 +340,7 @@
             const dt = document.getElementById('date-to').value;
             if (!df || !dt) return tg.showAlert("Выберите даты!");
 
-            // Переводим YYYY-MM-DD из инпута в ДД.ММ.ГГ для бэкенда
+            // перевод YYYY-MM-DD в ДД.ММ.ГГ для бекаа
             const formatDate = (iso) => {
                 const [y, m, d] = iso.split('-');
                 return `${d}.${m}.${y.slice(2)}`;
